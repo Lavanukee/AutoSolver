@@ -1,0 +1,87 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Macos be like
+**/.DS_Store
+
+# Cache files for Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+
+# Build folders
+**/build
+build-*/
+
+# Workspace files are user-specific
+*.sublime-workspace
+
+# ILY vscode
+**/.vscode
+
+# Local History for Visual Studio Code
+.history/
+
+# clangd
+.cache/
+compile_commands.json
+
+# Visual Studio
+.vs/
+
+# CLion
+.idea/
+/cmake-build-*/
+
+# CMake in-tree build artifacts (this project runs cmake in-place)
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/cpm-package-lock.cmake
+/Makefile
+/_deps/
+/geode/
+/bindings/
+
+# Geode mod artifacts
+*.geode
+*.zip
+
+# Local backups (not for public repo)
+/backups/
+
+# Third-party reference code (not ours to publish)
+/EclipseMenu - For Reference/
+
+# Stale duplicate of mod.json
+/what.txt

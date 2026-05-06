@@ -1,0 +1,85 @@
+{
+	"geode": "5.6.1",
+	"gd": {
+		"win": "*",
+		"android": "*",
+		"mac": "*",
+		"ios": "*"
+	},
+	"id": "jedd.trajectory",
+	"name": "Autosolver",
+	"version": "1.0.0",
+	"developer": "Jedd",
+	"description": "Geometry Dash full featured trajectory mod",
+	"settings": {
+		"show-trajectory": {
+			"type": "bool",
+			"default": false,
+			"name": "Show Trajectory",
+			"description": "Visualize a per-frame trajectory simulation (green = hold, red = release) starting from the real player's current state. Independent from the autosolver bot."
+		},
+		"trajectory-iterations": {
+			"type": "int",
+			"default": 300,
+			"min": 1,
+			"max": 1000,
+			"name": "Trajectory Iterations",
+			"description": "Number of physics ticks the trajectory visualization simulates per frame."
+		},
+		"pads": {
+			"type": "bool",
+			"default": true,
+			"name": "Account for pads",
+			"description": "Take pads into account for the trajectory simulation"
+		},
+		"orbs": {
+			"type": "bool",
+			"default": true,
+			"name": "Account for orbs",
+			"description": "Take orbs into account for the trajectory simulation"
+		},
+		"portals": {
+			"type": "bool",
+			"default": true,
+			"name": "Account for portals",
+			"description": "Take portals into account for the trajectory simulation"
+		},
+		"bot-enabled": {
+			"type": "bool",
+			"default": false,
+			"name": "Bot Enabled",
+			"description": "Enable the autosolver bot. Also toggleable via F1 in-game and via the bottom-right button on the pause menu."
+		},
+		"debug-visuals": {
+			"type": "string",
+			"default": "off",
+			"one-of": ["off", "dots", "lines"],
+			"name": "Debug Visuals",
+			"description": "Show input transitions on the bot's chosen path. 'dots' = orange dot at hold-start / blue dot at release-start. 'lines' = full-height vertical line of the same color instead of a dot."
+		},
+		"bot-hold-offset": {
+			"type": "int",
+			"default": 0,
+			"min": -10,
+			"max": 10,
+			"name": "Hold Input Offset (frames)",
+			"description": "Shift hold-start (false→true) input injections by this many frames relative to the simulated plan. Negative = inject earlier (compensates for the engine reading inputs 1 frame after they're set). Positive = inject later. 0 disables shifting."
+		},
+		"bot-divergence-threshold": {
+			"type": "float",
+			"default": 1.0,
+			"min": 0.0,
+			"max": 1000.0,
+			"name": "Divergence Threshold (units)",
+			"description": "If the real player drifts from the cached best path by more than this many world units, the cache is discarded immediately and the current frame's best candidate is used. 0 = always replace, large = only replace when a strictly longer path is found."
+		},
+		"bot-release-offset": {
+			"type": "int",
+			"default": 0,
+			"min": -10,
+			"max": 10,
+			"name": "Release Input Offset (frames)",
+			"description": "Shift release-start (true→false) input injections by this many frames relative to the simulated plan. Same convention as Hold Input Offset."
+		}
+	}
+}
