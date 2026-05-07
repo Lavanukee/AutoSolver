@@ -56,8 +56,10 @@ void Bot::runSearch() {
 
     // Candidates this frame come from the user-authored Path Builder paths,
     // filtered to ones whose gamemode mask matches the current player vehicle.
-    uint8_t gmBit = currentGamemodeBit(base);
-    std::vector<Candidate> candidates = PathBuilder::get().generateCandidates(HORIZON, gmBit);
+    // In 2P-mode dual, P1 and P2 can have different vehicles (one cube, one
+    // ship), so P2 needs candidates filtered to ITS gamemode.
+    uint8_t const gmBitP1 = currentGamemodeBit(base);
+    std::vector<Candidate> candidates = PathBuilder::get().generateCandidates(HORIZON, gmBitP1);
     if (candidates.empty()) {
         m_candidateTraces.clear();
         BotViz::get().clear();
@@ -67,11 +69,16 @@ void Bot::runSearch() {
     BestPath winner;
     Score    winnerScore { INT_MIN, -FLT_MAX, true };
     bool     haveWinner = false;
+    size_t   winnerIdx  = 0;
 
     std::vector<TraceViz> traces;
     traces.reserve(candidates.size());
 
-    for (auto& c : candidates) {
+    // Stage 1: mirror search. Same plan applied to both players (correct for
+    // solo levels and for regular dual where P1/P2 face the same obstacles).
+    // For 2P-mode levels this is the baseline that stage 2 tries to improve on.
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        auto& c = candidates[i];
         traj::PlanResult res = trajSim.runPlan(base, base2, c.plan);
         Score s {
             res.framesSurvived,
@@ -90,8 +97,9 @@ void Bot::runSearch() {
         traces.push_back(std::move(tv));
 
         if (!haveWinner || isBetter(s, winnerScore)) {
-            haveWinner   = true;
-            winnerScore  = s;
+            haveWinner  = true;
+            winnerScore = s;
+            winnerIdx   = i;
 
             BestPath bp;
             int keep = std::min<int>(static_cast<int>(c.plan.size()), res.framesSurvived);
@@ -104,6 +112,61 @@ void Bot::runSearch() {
             bp.samples            = std::move(res.positions);
             bp.samples2           = std::move(res.positions2);
             winner = std::move(bp);
+        }
+    }
+
+    // Stage 2: 2P-mode independent P2 search. Mirror's joint survival is
+    // capped by whichever player dies first under the same input. If P2 was
+    // the limiter (different obstacles per side, common in 2P-mode levels),
+    // an independent plan2 can keep P2 alive longer — and joint survival
+    // grows because P1 is no longer constrained to "die together with P2".
+    // Algorithm: P1 fixed to mirror's full winning plan, search every
+    // candidate as plan2. Replace winner only on STRICT improvement (a tied
+    // plan2 isn't worth the search churn).
+    bool const isTwoPlayerLevel = m_pl->m_levelSettings
+                               && m_pl->m_levelSettings->m_twoPlayerMode;
+    if (isTwoPlayerLevel && haveWinner && base2) {
+        // candidatesP2 may differ from candidates if P1/P2 have different
+        // gamemodes (e.g. one cube + one ship). Reuse if same gamemode.
+        uint8_t const gmBitP2 = currentGamemodeBit(base2);
+        std::vector<Candidate> const& candidatesP2 =
+            (gmBitP2 == gmBitP1)
+                ? candidates
+                : PathBuilder::get().generateCandidates(HORIZON, gmBitP2);
+
+        // Use the FULL winning P1 plan (not winner.plan, which was trimmed to
+        // mirror's framesSurvived — stage 2 needs all HORIZON entries to have
+        // a chance at extending joint survival beyond mirror's death frame).
+        Plan const& p1Full = candidates[winnerIdx].plan;
+        int    bestSurvival = winnerScore.framesSurvived;
+        size_t bestP2Idx    = static_cast<size_t>(-1);
+        traj::PlanResult bestRes;
+
+        for (size_t i = 0; i < candidatesP2.size(); ++i) {
+            traj::PlanResult res = trajSim.runPlan(base, base2, p1Full, candidatesP2[i].plan);
+            if (res.framesSurvived > bestSurvival) {
+                bestSurvival = res.framesSurvived;
+                bestP2Idx    = i;
+                bestRes      = res;
+            }
+        }
+
+        if (bestP2Idx != static_cast<size_t>(-1)) {
+            Plan const& p2Full = candidatesP2[bestP2Idx].plan;
+            int keep1 = std::min<int>(static_cast<int>(p1Full.size()), bestSurvival);
+            int keep2 = std::min<int>(static_cast<int>(p2Full.size()), bestSurvival);
+            winner.plan.assign(p1Full.begin(), p1Full.begin() + keep1);
+            winner.plan2.assign(p2Full.begin(), p2Full.begin() + keep2);
+            winner.lastSurvivingFrame = F + bestSurvival;
+            winner.died               = bestRes.died;
+            winner.endPos             = bestRes.positions.empty()
+                                            ? base->getPosition()
+                                            : bestRes.positions.back();
+            winner.samples            = std::move(bestRes.positions);
+            winner.samples2           = std::move(bestRes.positions2);
+            winnerScore.framesSurvived = bestSurvival;
+            winnerScore.endX           = winner.samples.empty() ? 0.f : winner.samples.back().x;
+            winnerScore.died           = bestRes.died;
         }
     }
 

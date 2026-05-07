@@ -57,14 +57,6 @@
 			"name": "Debug Visuals",
 			"description": "Show input transitions on the bot's chosen path. 'dots' = orange dot at hold-start / blue dot at release-start. 'lines' = full-height vertical line of the same color instead of a dot."
 		},
-		"bot-hold-offset": {
-			"type": "int",
-			"default": 0,
-			"min": -10,
-			"max": 10,
-			"name": "Hold Input Offset (frames)",
-			"description": "Shift hold-start (false→true) input injections by this many frames relative to the simulated plan. Negative = inject earlier (compensates for the engine reading inputs 1 frame after they're set). Positive = inject later. 0 disables shifting."
-		},
 		"bot-divergence-threshold": {
 			"type": "float",
 			"default": 1.0,
@@ -73,13 +65,13 @@
 			"name": "Divergence Threshold (units)",
 			"description": "If the real player drifts from the cached best path by more than this many world units, the cache is discarded immediately and the current frame's best candidate is used. 0 = always replace, large = only replace when a strictly longer path is found."
 		},
-		"bot-release-offset": {
+		"bot-search-interval": {
 			"type": "int",
-			"default": 0,
-			"min": -10,
-			"max": 10,
-			"name": "Release Input Offset (frames)",
-			"description": "Shift release-start (true→false) input injections by this many frames relative to the simulated plan. Same convention as Hold Input Offset."
+			"default": 1,
+			"min": 1,
+			"max": 8,
+			"name": "Search Interval (visual frames)",
+			"description": "How often the bot recomputes the best path. 1 = every visual frame (60 Hz, max responsiveness, max CPU). 2 = every other frame (30 Hz). 8 = ~7.5 Hz. Input injection is unaffected and stays at 240 Hz; on off-frames the bot keeps executing the cached plan. Raise on heavy levels where the bot is dropping frames."
 		}
 	}
 }

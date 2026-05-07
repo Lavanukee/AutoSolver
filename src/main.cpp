@@ -29,9 +29,8 @@ $execute {
     sim.setPortalsEnabled(mod->getSettingValue<bool>("portals"));
     bot.setEnabled(mod->getSettingValue<bool>("bot-enabled"));
     bot.setDebugViz(parseDebugViz(mod->getSettingValue<std::string>("debug-visuals")));
-    bot.setHoldOffset(static_cast<int>(mod->getSettingValue<int64_t>("bot-hold-offset")));
-    bot.setReleaseOffset(static_cast<int>(mod->getSettingValue<int64_t>("bot-release-offset")));
     bot.setDivergenceThreshold(static_cast<float>(mod->getSettingValue<double>("bot-divergence-threshold")));
+    bot.setSearchInterval(static_cast<int>(mod->getSettingValue<int64_t>("bot-search-interval")));
     bot::PathBuilder::get().load();
 
     listenForSettingChanges<bool>("show-trajectory", [](bool v) {
@@ -55,13 +54,10 @@ $execute {
     listenForSettingChanges<std::string>("debug-visuals", [](std::string v) {
         bot::Bot::get().setDebugViz(parseDebugViz(v));
     });
-    listenForSettingChanges<int64_t>("bot-hold-offset", [](int64_t v) {
-        bot::Bot::get().setHoldOffset(static_cast<int>(v));
-    });
-    listenForSettingChanges<int64_t>("bot-release-offset", [](int64_t v) {
-        bot::Bot::get().setReleaseOffset(static_cast<int>(v));
-    });
     listenForSettingChanges<double>("bot-divergence-threshold", [](double v) {
         bot::Bot::get().setDivergenceThreshold(static_cast<float>(v));
+    });
+    listenForSettingChanges<int64_t>("bot-search-interval", [](int64_t v) {
+        bot::Bot::get().setSearchInterval(static_cast<int>(v));
     });
 }

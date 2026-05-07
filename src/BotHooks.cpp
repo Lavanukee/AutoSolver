@@ -60,7 +60,9 @@ class $modify(BotBGLHook, GJBaseGameLayer) {
         // the stack. isSimulating() is true exactly inside runPlan/runBranch.
         if (!sim().isSimulating()
             && static_cast<GJBaseGameLayer*>(b.playLayer()) == this) {
-            b.runSearch();
+            if (b.stepVisualFrameAndShouldSearch()) {
+                b.runSearch();
+            }
         }
         GJBaseGameLayer::updateCamera(dt);
     }
@@ -99,22 +101,56 @@ class $modify(BotPlayerObjectHook, PlayerObject) {
     void update(float dt) {
         auto& b = bot_();
         auto* pl = b.playLayer();
-        bool ours = pl
-                    && (this == pl->m_player1)
-                    && !sim().isSimulating()
-                    && b.levelReady();
+        bool const isP1 = pl && (this == pl->m_player1);
+        bool const isP2 = pl && (this == pl->m_player2);
+        bool const live = pl && !sim().isSimulating() && b.levelReady() && b.enabled();
 
-        if (ours && b.enabled()) {
-            bool want = b.inputForCurrentFrame();
+        if (live && isP1) {
+            bool const want = b.inputForCurrentFrame();
             if (want != b.lastHeld()) {
-                if (want) this->pushButton(PlayerButton::Jump);
-                else      this->releaseButton(PlayerButton::Jump);
-                b.setLastHeld(want);
+                // Plan-switch divergence guard: if reality has drifted from
+                // the cached plan's predicted position for THIS tick, the
+                // flip-decision is rooted in stale state — drop it and let
+                // the next 60Hz search rebase the plan from current reality.
+                if (b.shouldDiscardP1Flip(this->getPosition())) {
+                    // Hold lastHeld; the guard already logged.
+                } else {
+                    if (want) this->pushButton(PlayerButton::Jump);
+                    else      this->releaseButton(PlayerButton::Jump);
+                    b.setLastHeld(want);
+                }
+            }
+        } else if (live && isP2 && pl->m_gameState.m_isDualMode) {
+            // P2 input runs in P2's OWN hook (PRE-super) so pushButton lands
+            // immediately before P2's collision+update pass — surviving
+            // anything the engine might touch between P1's super and P2's
+            // super (queue draining, per-player state resets).
+            //
+            // inputForCurrentFrameP2 returns plan2[idx] in 2P-mode (where the
+            // search produces independent P1/P2 plans), or m_lastHeld in
+            // regular dual (where P2 mirrors P1). Use it directly rather than
+            // reading lastHeld here so 2P-mode levels get their independent
+            // P2 input. m_frame has advanced past P1's tick by now (advanceFrame
+            // fires at end of P1's super), so we explicitly index off P1's
+            // last-applied tick: lastHeld is canonical for the mirror case,
+            // and plan2 is indexed by the same m_frame as plan but the lookup
+            // is done via inputForCurrentFrameP2 which uses the same idx math.
+            // Net effect: regular dual mirrors via lastHeld (unchanged), 2P
+            // mode reads plan2[m_frame - planStart].
+            bool const want = b.inputForCurrentFrameP2();
+            if (this->buttonDown(PlayerButton::Jump) != want) {
+                if (b.shouldDiscardP2Flip(this->getPosition())) {
+                    // Drop the flip; only meaningful in 2P-mode where P2 has
+                    // its own plan2 + samples2 to diverge against.
+                } else {
+                    if (want) this->pushButton(PlayerButton::Jump);
+                    else      this->releaseButton(PlayerButton::Jump);
+                }
             }
         }
 
         PlayerObject::update(dt);
 
-        if (ours) b.advanceFrame();
+        if (isP1 && live) b.advanceFrame();
     }
 };

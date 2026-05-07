@@ -19,6 +19,13 @@ enum class DebugViz { Off, Dots, Lines };
 //   - plan                — queued inputs for the best path
 struct BestPath {
     Plan                              plan;
+    // Independent P2 plan for 2P-mode levels (LevelSettings::m_twoPlayerMode).
+    // Empty in solo levels and in single-player-with-dual-portal levels — in
+    // those cases P2 mirrors P1's plan, which is the correct behavior because
+    // either player's death kills both, and the obstacles per side are the
+    // same. In 2P-mode the level designer authored independent obstacles per
+    // player, so P1 and P2 each need their own input sequence.
+    Plan                              plan2;
     int64_t                           planStart           = 0;
     int64_t                           lastSurvivingFrame  = -1;
     int64_t                           frameFound          = -1;
@@ -66,22 +73,24 @@ public:
     void setDebugViz(DebugViz v);
     DebugViz debugViz() const { return m_viz; }
 
-    // Per-transition input offsets, in physics frames. Negative = inject
-    // sooner than the simulated plan dictates (compensates for the engine
-    // reading button state on the tick AFTER it's set). Applied lazily in
-    // inputForCurrentFrame() so the cached plan + samples stay in sync with
-    // what the simulator predicted.
-    void setHoldOffset(int v)    { m_holdOffset    = v; }
-    void setReleaseOffset(int v) { m_releaseOffset = v; }
-    int  holdOffset()    const   { return m_holdOffset; }
-    int  releaseOffset() const   { return m_releaseOffset; }
-
     void  setDivergenceThreshold(float v) { m_divergenceThreshold = v < 0.f ? 0.f : v; }
     float divergenceThreshold() const     { return m_divergenceThreshold; }
 
+    // Search runs from updateCamera at the visual-frame rate (60 Hz). Setting
+    // this to N>1 means the bot only searches every N visual frames; the
+    // cached plan keeps executing on the off-frames. Input injection is
+    // unaffected — that still runs at 240 Hz from PlayerObject::update.
+    void setSearchInterval(int v) { m_searchInterval = v < 1 ? 1 : v; }
+    int  searchInterval() const   { return m_searchInterval; }
+    // Returns true if the current visual frame is a search frame; the hook
+    // increments m_visualFrame each call regardless.
+    bool stepVisualFrameAndShouldSearch();
+
     // Frame counter (incremented once per physics tick by the input hook)
     int64_t currentFrame() const { return m_frame; }
-    void advanceFrame() { ++m_frame; }
+    // Implementation lives in Bot.cpp — runs the divergence detector before
+    // bumping the counter (so m_frame still names the tick that just ran).
+    void advanceFrame();
 
     // Input injection state — flipped by the bot when it calls handleButton
     // so the suppression hook lets the synthesized event through.
@@ -91,7 +100,20 @@ public:
     void setLastHeld(bool v) { m_lastHeld = v; }
 
     // Read the input the cached plan has queued for the current absolute frame.
+    // P1 reads from plan; P2 reads from plan2 if non-empty (2P-mode), else
+    // mirrors P1 via m_lastHeld. The hook calls these PRE-super so the input
+    // lands the same tick the plan asserts.
     bool inputForCurrentFrame() const;
+    bool inputForCurrentFrameP2() const;
+
+    // Plan-switch divergence guard: returns true if a planned input flip THIS
+    // tick should be discarded because the cached plan's predicted position
+    // for THIS frame has diverged from the player's actual position by more
+    // than the user-set threshold. Logs the discard. The next search tick
+    // (60Hz) will rebase the plan from current real state, at which point
+    // flips can resume.
+    bool shouldDiscardP1Flip(cocos2d::CCPoint actualPos) const;
+    bool shouldDiscardP2Flip(cocos2d::CCPoint actualPos) const;
 
     BestPath const& bestPath() const { return m_best; }
 
@@ -127,8 +149,6 @@ private:
     bool       m_injecting = false;
     bool       m_lastHeld  = false;
 
-    int        m_holdOffset    = 0;
-    int        m_releaseOffset = 0;
     float      m_divergenceThreshold = 1.f;
 
     BestPath              m_best;
@@ -142,6 +162,17 @@ private:
     // to make the failure mode "skip this frame's search" instead of crash.
     bool m_inSearch    = false;
     bool m_levelReady  = false;
+
+    // Visual-frame counter (60 Hz, distinct from m_frame which is the 240 Hz
+    // physics frame). Used only by the search-interval gate.
+    int64_t m_visualFrame    = 0;
+    int     m_searchInterval = 1;
+
+    // Rate-limit token for [divergence] logs in advanceFrame. Without it,
+    // any sustained drift would log every 240Hz tick and the fmt formatting
+    // alone would tank the frame budget. Records the last m_frame at which
+    // we logged; we re-log only after 60 ticks have passed (≤4 logs/sec).
+    int64_t m_lastDivergenceLogFrame = -1000;
 };
 
 }

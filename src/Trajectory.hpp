@@ -43,12 +43,16 @@ public:
 
     // Bot path testing: simulate one specific plan starting from `base1` (and
     // `base2` in dual mode — pass nullptr for solo). Both players step in
-    // lockstep and share the same input; the run stops at the first frame
-    // EITHER player dies, and PlanResult::framesSurvived is the count of
-    // fully-survived frames (so a plan that keeps both alive longer scores
-    // higher). Returns per-frame world positions for each player.
+    // lockstep; the run stops at the first frame EITHER player dies, and
+    // PlanResult::framesSurvived is the count of fully-survived frames (so a
+    // plan that keeps both alive longer scores higher).
+    //
+    // `plan2` is the independent input sequence for P2 in 2P-mode levels; pass
+    // an empty vector to make P2 mirror P1 (the correct behavior in regular
+    // dual where P1 and P2 face the same obstacles).
     PlanResult runPlan(PlayerObject* base1, PlayerObject* base2,
-                       std::vector<bool> const& plan);
+                       std::vector<bool> const& plan,
+                       std::vector<bool> const& plan2 = {});
 
     bool isSimulating() const { return m_simulating; }
     bool isSimPlayer(PlayerObject* p) const { return p && (p == m_simP1 || p == m_simP2); }
@@ -136,6 +140,12 @@ private:
     float m_frameDt{1.f / 240.f};
 
     std::unordered_set<EnhancedGameObject*> m_activated;
+
+    // Rate-limit budget for [orb-far-activate] log. Decremented on each
+    // qualifying event (sim activates an orb >30 units away); when ≤0 we
+    // log and reset. Without this the candidate × frame × orb fan-out from
+    // a level full of false-hits can drown the log and tank perf.
+    int m_orbFarLogBudget = 0;
 };
 
 }

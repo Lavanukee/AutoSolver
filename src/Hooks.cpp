@@ -104,6 +104,23 @@ class $modify(TrajBaseLayerHook, GJBaseGameLayer) {
             return;
         }
 
+        // Spatial cull window. GD blocks are 30 units. The horizon is
+        // 360 physics ticks at ~10.4 units/tick (speed 1) ≈ 3744 units, but
+        // most plans terminate well inside that. 80 blocks (2400 units) ahead
+        // is comfortably larger than typical sim reach and still trims the
+        // fat from level-end-tail object lists. 30 blocks (900) behind keeps
+        // the recent ground/wall set so retreat-style paths don't lose floor
+        // collision. Wide objects (long platforms whose origin lies behind
+        // the back edge) are kept via the right-edge test below.
+        constexpr float kBlocks      = 30.f;
+        constexpr float kAheadBlocks = 80.f;
+        constexpr float kBackBlocks  = 30.f;
+        constexpr float kAheadUnits  = kAheadBlocks * kBlocks;
+        constexpr float kBackUnits   = kBackBlocks  * kBlocks;
+        float const px       = player ? player->getPositionX() : 0.f;
+        float const minX     = px - kBackUnits;
+        float const maxX     = px + kAheadUnits;
+
         gd::vector<GameObject*> filtered;
 #ifndef GEODE_IS_ANDROID
         filtered.reserve(objectsCount);
@@ -124,6 +141,15 @@ class $modify(TrajBaseLayerHook, GJBaseGameLayer) {
             // there's nothing to lose by skipping them.
             else if (t == GameObjectType::UserCoin
                   || t == GameObjectType::SecretCoin) keep = false;
+            if (keep && player) {
+                float const ox = obj->getPositionX();
+                if (ox > maxX) {
+                    keep = false;
+                } else if (ox < minX) {
+                    auto const r = obj->getObjectRect();
+                    if (ox + r.size.width < minX) keep = false;
+                }
+            }
             if (keep) filtered.push_back(obj);
         }
         GJBaseGameLayer::collisionCheckObjects(player, &filtered,
@@ -201,6 +227,92 @@ class $modify(TrajBaseLayerHook, GJBaseGameLayer) {
         GJBaseGameLayer::playFlashEffect(duration, flashes, unknown);
     }
 
+    // Particle factories. The state snapshot can revert m_camera/m_isDualMode/
+    // etc., but it can't undo a CCParticleSystemQuad that's been added to the
+    // scene tree — those keep emitting after sim ends. Suppress at source.
+    // spawnParticle returns the particle pointer; callers in the engine may or
+    // may not dereference it. Returning nullptr is the standard sim pattern;
+    // any caller crash on null would be a pre-existing engine bug surfaced by
+    // the suppression, not introduced by it.
+    cocos2d::CCParticleSystemQuad* spawnParticle(char const* plist, int zOrder,
+                                                 cocos2d::tCCPositionType positionType,
+                                                 cocos2d::CCPoint position) {
+        if (sim().isSimulating()) return nullptr;
+        return GJBaseGameLayer::spawnParticle(plist, zOrder, positionType, position);
+    }
+    void spawnParticleTrigger(SpawnParticleGameObject* object) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::spawnParticleTrigger(object);
+    }
+    void spawnParticleTrigger(int particleID, cocos2d::CCPoint position,
+                              float rotation, float scale) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::spawnParticleTrigger(particleID, position, rotation, scale);
+    }
+    void lightningFlash(cocos2d::CCPoint to, cocos2d::ccColor3B color) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::lightningFlash(to, color);
+    }
+    void lightningFlash(cocos2d::CCPoint from, cocos2d::CCPoint to,
+                        cocos2d::ccColor3B color, float lineWidth, float duration,
+                        int displacement, bool flash, float opacity) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::lightningFlash(from, to, color, lineWidth, duration,
+                                        displacement, flash, opacity);
+    }
+    // playSpeedParticle fires from speed-mod portal traversal. Sim NEEDS the
+    // speed change itself (handled in TrajEffectHook::triggerObject's
+    // isSpeedMod exception), but the visual particle burst should not appear
+    // on the real screen when sim crosses a speed portal.
+    void playSpeedParticle(float timeMod) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::playSpeedParticle(timeMod);
+    }
+
+    // Camera-tween CCActions. Same problem class as shakeCamera/moveCameraToPos:
+    // the snapshot reverts m_cameraPosition but the action keeps running and
+    // re-applies the tween to the real game. Suppress at source.
+    void cameraMoveX(float value, float duration, float rate, bool unused) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::cameraMoveX(value, duration, rate, unused);
+    }
+    void cameraMoveY(float value, float duration, float rate, bool force) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::cameraMoveY(value, duration, rate, force);
+    }
+    void updateCameraOffsetX(float offsetX, float duration, int easingType,
+                             float easingRate, int uniqueID, int controlID) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::updateCameraOffsetX(offsetX, duration, easingType,
+                                             easingRate, uniqueID, controlID);
+    }
+    void updateCameraOffsetY(float offsetY, float duration, int easingType,
+                             float easingRate, int uniqueID, int controlID) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::updateCameraOffsetY(offsetY, duration, easingType,
+                                             easingRate, uniqueID, controlID);
+    }
+    void updateStaticCameraPos(cocos2d::CCPoint pos, bool staticX, bool staticY,
+                               bool followOrSmoothEase, float time,
+                               int easingType, float easingRate) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::updateStaticCameraPos(pos, staticX, staticY,
+                                               followOrSmoothEase, time,
+                                               easingType, easingRate);
+    }
+    void updateStaticCameraPosToGroup(int centerID, bool updateX, bool updateY,
+                                      bool followObject, float followEase,
+                                      float duration, int easingType,
+                                      float easingRate, bool smoothVelocity,
+                                      float velocityMod) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::updateStaticCameraPosToGroup(centerID, updateX, updateY,
+                                                      followObject, followEase,
+                                                      duration, easingType,
+                                                      easingRate, smoothVelocity,
+                                                      velocityMod);
+    }
+
     // GJBaseGameLayer::playGravityEffect is an inline definition (Geode can't
     // hook it). We hook PlayLayer::playGravityEffect (the runtime-resolved
     // virtual override) instead — see TrajPlayLayerHook above.
@@ -225,6 +337,29 @@ class $modify(TrajPlayerObjectHook, PlayerObject) {
     void playBumpEffect(int objectType, GameObject* obj) {
         if (sim().isSimulating()) return;
         PlayerObject::playBumpEffect(objectType, obj);
+    }
+
+    // Mode-switch portal flash. Lives on the player, not the layer, so the
+    // GJBaseGameLayer playFlashEffect gate doesn't catch it. Same suppress
+    // pattern.
+    void flashPlayer(float flashDuration, float flashDelay,
+                     cocos2d::ccColor3B mainColor, cocos2d::ccColor3B secondColor) {
+        if (sim().isSimulating()) return;
+        PlayerObject::flashPlayer(flashDuration, flashDelay, mainColor, secondColor);
+    }
+
+    // Speed-mod portals call into PlayerObject::updateTimeMod via the layer's
+    // updateTimeMod(speed, /*players=*/true, ...), which fans out to BOTH real
+    // players regardless of who crossed. When a sim crosses a speed portal,
+    // EffectGameObject::triggerObject is allowed (TrajEffectHook gates on
+    // !isSpeedMod), and that path lands here on m_player1 / m_player2 — and
+    // overwrites the real players' m_playerSpeed. Block that during sim
+    // unless the target is a sim player (so the sim still gets its own
+    // speed update for accurate prediction).
+    void updateTimeMod(float speed, bool noEffects) {
+        auto& s = sim();
+        if (s.isSimulating() && !s.isSimPlayer(this)) return;
+        PlayerObject::updateTimeMod(speed, noEffects);
     }
 };
 

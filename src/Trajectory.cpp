@@ -1,5 +1,7 @@
 #include "Trajectory.hpp"
 
+#include <cmath>
+
 using namespace geode::prelude;
 
 namespace traj {
@@ -51,6 +53,15 @@ struct LayerStateSnapshot {
     float            timeWarp, queuedTimeWarp, timeWarpRelated;
     int              currentChannel, rotateChannel;
 
+    // m_speedObjects is a CCArray that the engine appends to via
+    // addToSpeedObjects when ANY player (sim or real) crosses a speed-mod
+    // portal. Once an entry is in this array, the engine consults it on
+    // every subsequent tick to compute player speed — meaning if a sim
+    // adds an entry, the real player picks up that speed change too.
+    // Snapshot the array's pointer-set so we can restore it cleanly.
+    // Pointers only — items are owned elsewhere; we're not refcounting.
+    std::vector<cocos2d::CCObject*> speedObjects;
+
     void capture(PlayLayer* p) {
         pl = p;
         if (!pl) return;
@@ -81,6 +92,13 @@ struct LayerStateSnapshot {
         timeWarpRelated       = gs.m_timeWarpRelated;
         currentChannel        = gs.m_currentChannel;
         rotateChannel         = gs.m_rotateChannel;
+        speedObjects.clear();
+        if (auto* arr = pl->m_speedObjects) {
+            speedObjects.reserve(arr->count());
+            for (int i = 0; i < static_cast<int>(arr->count()); ++i) {
+                speedObjects.push_back(arr->objectAtIndex(i));
+            }
+        }
     }
     void restore() {
         if (!pl) return;
@@ -111,6 +129,12 @@ struct LayerStateSnapshot {
         gs.m_timeWarpRelated      = timeWarpRelated;
         gs.m_currentChannel       = currentChannel;
         gs.m_rotateChannel        = rotateChannel;
+        if (auto* arr = pl->m_speedObjects) {
+            arr->removeAllObjects();
+            for (auto* obj : speedObjects) {
+                if (obj) arr->addObject(obj);
+            }
+        }
     }
 };
 
@@ -274,7 +298,29 @@ void TrajectorySimulator::clearSimDead(PlayerObject* p) {
 }
 
 void TrajectorySimulator::markActivated(EnhancedGameObject* obj) {
-    if (obj) m_activated.insert(obj);
+    if (!obj) return;
+    // Diagnostic for orb false-hit (E4): when a sim activates an orb that's
+    // visually far from its position, this trace pinpoints the culprit.
+    // Bounded by m_activated dedup per branch + a global rate-limit so
+    // candidate × frame × orb fan-out can't drown the log.
+    if (m_simulating && m_activated.find(obj) == m_activated.end()) {
+        auto* sim = m_simP1 ? m_simP1 : m_simP2;
+        if (sim) {
+            auto const sp = sim->getPosition();
+            auto const op = obj->getPosition();
+            float const dx = sp.x - op.x;
+            float const dy = sp.y - op.y;
+            float const dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > 30.f && --m_orbFarLogBudget <= 0) {
+                m_orbFarLogBudget = 60;  // ≤1 line / ~1s at 60Hz search cadence
+                geode::log::warn(
+                    "[orb-far-activate] objType={} simPos=({:.1f},{:.1f}) "
+                    "objPos=({:.1f},{:.1f}) dist={:.1f}",
+                    static_cast<int>(obj->m_objectType), sp.x, sp.y, op.x, op.y, dist);
+            }
+        }
+    }
+    m_activated.insert(obj);
 }
 
 bool TrajectorySimulator::hasBeenActivated(EnhancedGameObject* obj) const {
@@ -386,7 +432,8 @@ void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
 }
 
 PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2,
-                                        std::vector<bool> const& plan) {
+                                        std::vector<bool> const& plan,
+                                        std::vector<bool> const& plan2) {
     PlanResult result;
     if (!base1 || !m_pl || !m_simP1 || plan.empty()) return result;
 
@@ -422,20 +469,36 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
         result.positions2.push_back(simB->getPosition());
     }
 
-    bool prev = false;
-    bool first = true;
+    // Independent P2 plan only meaningful when simB exists; otherwise P2
+    // mirrors P1 (or doesn't exist at all).
+    bool const useIndependentP2 = simB && !plan2.empty();
+
+    bool prevA = false;
+    bool prevB = false;
+    bool firstA = true;
+    bool firstB = true;
     for (size_t i = 0; i < plan.size(); ++i) {
-        bool want = plan[i];
-        if (first || want != prev) {
-            if (want) {
-                simA->pushButton(PlayerButton::Jump);
-                if (simB) simB->pushButton(PlayerButton::Jump);
-            } else {
-                simA->releaseButton(PlayerButton::Jump);
-                if (simB) simB->releaseButton(PlayerButton::Jump);
-            }
-            prev = want;
-            first = false;
+        bool const wantA = plan[i];
+        // P2 input: own plan if 2P-mode (clamp to plan2 length, then hold last
+        // value); else mirror P1.
+        bool wantB;
+        if (useIndependentP2) {
+            wantB = plan2[std::min(i, plan2.size() - 1)];
+        } else {
+            wantB = wantA;
+        }
+
+        if (firstA || wantA != prevA) {
+            if (wantA) simA->pushButton(PlayerButton::Jump);
+            else       simA->releaseButton(PlayerButton::Jump);
+            prevA = wantA;
+            firstA = false;
+        }
+        if (simB && (firstB || wantB != prevB)) {
+            if (wantB) simB->pushButton(PlayerButton::Jump);
+            else       simB->releaseButton(PlayerButton::Jump);
+            prevB = wantB;
+            firstB = false;
         }
 
         simA->resetCollisionLog(true);
