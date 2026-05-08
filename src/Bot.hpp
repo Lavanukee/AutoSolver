@@ -73,6 +73,13 @@ public:
     void setDebugViz(DebugViz v);
     DebugViz debugViz() const { return m_viz; }
 
+    // Master gate for all bot visualization (candidate traces + best-path
+    // overlay + dot/line transition markers). Independent from `enabled` so
+    // the user can run the bot headlessly. Toggleable via X keybind and via
+    // the "show-bot-trajectory" mod setting.
+    void setShowBotTraj(bool v);
+    bool showBotTraj() const { return m_showBotTraj; }
+
     void  setDivergenceThreshold(float v) { m_divergenceThreshold = v < 0.f ? 0.f : v; }
     float divergenceThreshold() const     { return m_divergenceThreshold; }
 
@@ -141,9 +148,10 @@ private:
     Bot(const Bot&) = delete;
     Bot& operator=(const Bot&) = delete;
 
-    PlayLayer* m_pl       = nullptr;
-    bool       m_enabled  = false;
-    DebugViz   m_viz      = DebugViz::Off;
+    PlayLayer*   m_pl           = nullptr;
+    bool         m_enabled      = false;
+    DebugViz     m_viz          = DebugViz::Off;
+    bool         m_showBotTraj  = true;
 
     int64_t    m_frame     = 0;
     bool       m_injecting = false;

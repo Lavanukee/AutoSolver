@@ -96,21 +96,31 @@ class $modify(TrajBaseLayerHook, GJBaseGameLayer) {
         GJBaseGameLayer::handleButton(down, button, isPlayer1);
     }
 
-    // Suppress object destruction (breakable blocks, explosion-target objects,
-    // anything else routed through this method) when the sim is the cause.
-    // The engine's destroyObject path removes the object from the level's
-    // active set and runs spawn-remove triggers — both of those persist past
-    // any LayerStateSnapshot we currently capture, so a sim-broken block is
-    // gone for the real player too. Conservative: sim physics will see the
-    // block as still solid (collide / die against it). The real player will
-    // either avoid it or break it through their own gameplay path; either is
-    // safer than corrupting the level state.
+    // Sim-side breakable block / object-destroy handling.
     //
-    // destroyPlayer is a separate, already-hooked path (the cascading-dual
-    // suppression at PlayLayer::destroyPlayer); this only catches GameObject
-    // destruction, which is the breakable-block / similar-object route.
+    // The engine's destroyObject mutates the real level (removes from active
+    // arrays, hides sprites, fires spawn-remove triggers). None of that is
+    // cheaply reversible per-runPlan, so we never let it run during sim. But
+    // we still want sim physics to "feel" the block as broken — otherwise the
+    // sim collides with a block the real player will break through, and the
+    // bot picks worse paths than reality affords.
+    //
+    // Resolution: track the object in a sim-local destroyed set. The
+    // collisionCheckObjects filter (above) drops sim-destroyed objects from
+    // the candidate list, so the sim's collision pass treats the block as
+    // gone — same physical effect as destruction, zero engine state change.
+    // The set is cleared at the start of each runPlan/runBranch, so each
+    // sim search starts from a clean view of the level.
+    //
+    // destroyPlayer is a separate, already-hooked path (PlayLayer's cascading-
+    // dual suppression); this only catches GameObject destruction, which is
+    // the breakable-block / similar-object route.
     void destroyObject(GameObject* object) {
-        if (sim().isSimulating()) return;
+        auto& s = sim();
+        if (s.isSimulating()) {
+            s.markSimDestroyed(object);
+            return;
+        }
         GJBaseGameLayer::destroyObject(object);
     }
 
@@ -145,6 +155,12 @@ class $modify(TrajBaseLayerHook, GJBaseGameLayer) {
 #endif
         for (int i = 0; i < objectsCount; ++i) {
             GameObject* obj = vec->at(i);
+            // Sim-destroyed (breakable blocks etc. broken earlier in this
+            // runPlan): drop so the sim's physics treats the block as gone.
+            // Real level state is untouched — markSimDestroyed only writes
+            // to TrajectorySimulator's per-run set, which clears at the
+            // start of each runPlan/runBranch.
+            if (s.isSimDestroyed(obj)) continue;
             auto t = obj->m_objectType;
             bool keep = true;
             if (traj::isPad(t))         keep = s.wantsPads();

@@ -71,6 +71,21 @@ public:
     void markActivated(EnhancedGameObject* obj);
     bool hasBeenActivated(EnhancedGameObject* obj) const;
 
+    // Sim-local "destroyed" tracking. The engine's destroyObject mutates the
+    // real level (removes from active arrays, hides the sprite, fires spawn
+    // triggers) — none of which we can cheaply roll back. So during sim we
+    // intercept destroyObject and only mark the object as destroyed-for-sim
+    // here; the collisionCheckObjects filter then drops any sim-destroyed
+    // object from the candidate set so the sim's physics treats the block as
+    // gone (lets the sim "break through" it). The set persists across ticks
+    // within a single runPlan/runBranch (so the sim doesn't re-collide with
+    // a block it already destroyed), and is cleared at the start of each
+    // runPlan/runBranch so subsequent searches start from a clean slate.
+    // Real level state never changes.
+    void markSimDestroyed(GameObject* obj);
+    bool isSimDestroyed(GameObject* obj) const;
+    void clearSimDestroyed();
+
     // Flipped true at the end of our setupHasCompleted hook (after the engine's
     // own setup-tick updateCamera has fired). Gates simulate() so the very
     // first updateCamera doesn't run sim against half-wired engine state.
@@ -152,6 +167,7 @@ private:
     float m_frameDt{1.f / 240.f};
 
     std::unordered_set<EnhancedGameObject*> m_activated;
+    std::unordered_set<GameObject*>         m_simDestroyed;
 
     // Rate-limit budget for [orb-far-activate] log. Decremented on each
     // qualifying event (sim activates an orb >30 units away); when ≤0 we

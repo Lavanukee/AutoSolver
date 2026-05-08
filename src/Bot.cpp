@@ -67,6 +67,12 @@ void Bot::setDebugViz(DebugViz v) {
     if (v == DebugViz::Off) BotViz::get().clear();
 }
 
+void Bot::setShowBotTraj(bool v) {
+    if (m_showBotTraj == v) return;
+    m_showBotTraj = v;
+    if (!v) BotViz::get().clear();
+}
+
 bool Bot::inputForCurrentFrame() const {
     if (!m_enabled) return false;
     if (m_best.empty()) return m_lastHeld;

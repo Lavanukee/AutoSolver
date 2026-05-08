@@ -327,6 +327,18 @@ bool TrajectorySimulator::hasBeenActivated(EnhancedGameObject* obj) const {
     return obj && m_activated.find(obj) != m_activated.end();
 }
 
+void TrajectorySimulator::markSimDestroyed(GameObject* obj) {
+    if (obj) m_simDestroyed.insert(obj);
+}
+
+bool TrajectorySimulator::isSimDestroyed(GameObject* obj) const {
+    return obj && m_simDestroyed.find(obj) != m_simDestroyed.end();
+}
+
+void TrajectorySimulator::clearSimDestroyed() {
+    m_simDestroyed.clear();
+}
+
 void TrajectorySimulator::clearSimRingState(PlayerObject* sim) {
     if (!sim) return;
     sim->m_dashRing = nullptr;
@@ -416,6 +428,7 @@ void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
     sim->m_isOnGround = base->m_isOnGround;
     clearSimRingState(sim);
     m_activated.clear();
+    clearSimDestroyed();
     clearSimDead(sim);
 
     if (holdAtStart) sim->pushButton(PlayerButton::Jump);
@@ -467,6 +480,7 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
     initSim(simA, base1);
     if (simB) initSim(simB, base2);
     m_activated.clear();
+    clearSimDestroyed();
 
     // Snapshot per-runPlan: bot scoring calls runPlan many times per visual
     // frame to grade candidates; without restore, candidate N starts from

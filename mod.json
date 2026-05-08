@@ -48,7 +48,13 @@
 			"type": "bool",
 			"default": false,
 			"name": "Bot Enabled",
-			"description": "Enable the autosolver bot. Also toggleable via F1 in-game and via the bottom-right button on the pause menu."
+			"description": "Enable the autosolver bot. Also toggleable via Z (or F1) in-game and via the bottom-right button on the pause menu."
+		},
+		"show-bot-trajectory": {
+			"type": "bool",
+			"default": true,
+			"name": "Show Bot Trajectory",
+			"description": "Visualize the bot's chosen path and candidate traces. The bot itself keeps running when this is off — only rendering is muted. Toggleable via X in-game."
 		},
 		"debug-visuals": {
 			"type": "string",

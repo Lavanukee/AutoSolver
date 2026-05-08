@@ -28,6 +28,7 @@ $execute {
     sim.setOrbsEnabled(mod->getSettingValue<bool>("orbs"));
     sim.setPortalsEnabled(mod->getSettingValue<bool>("portals"));
     bot.setEnabled(mod->getSettingValue<bool>("bot-enabled"));
+    bot.setShowBotTraj(mod->getSettingValue<bool>("show-bot-trajectory"));
     bot.setDebugViz(parseDebugViz(mod->getSettingValue<std::string>("debug-visuals")));
     bot.setDivergenceThreshold(static_cast<float>(mod->getSettingValue<double>("bot-divergence-threshold")));
     bot.setSearchInterval(static_cast<int>(mod->getSettingValue<int64_t>("bot-search-interval")));
@@ -50,6 +51,9 @@ $execute {
     });
     listenForSettingChanges<bool>("bot-enabled", [](bool v) {
         bot::Bot::get().setEnabled(v);
+    });
+    listenForSettingChanges<bool>("show-bot-trajectory", [](bool v) {
+        bot::Bot::get().setShowBotTraj(v);
     });
     listenForSettingChanges<std::string>("debug-visuals", [](std::string v) {
         bot::Bot::get().setDebugViz(parseDebugViz(v));

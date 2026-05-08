@@ -1,5 +1,6 @@
 #include "Bot.hpp"
 #include "PathBuilder.hpp"
+#include "Trajectory.hpp"
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/PauseLayer.hpp>
@@ -15,6 +16,18 @@ void toggleBotEnabled() {
     bool now = !Mod::get()->getSettingValue<bool>("bot-enabled");
     Mod::get()->setSettingValue<bool>("bot-enabled", now);
     bot::Bot::get().setEnabled(now);
+}
+
+void toggleShowBotTraj() {
+    bool now = !Mod::get()->getSettingValue<bool>("show-bot-trajectory");
+    Mod::get()->setSettingValue<bool>("show-bot-trajectory", now);
+    bot::Bot::get().setShowBotTraj(now);
+}
+
+void toggleShowTrajectory() {
+    bool now = !Mod::get()->getSettingValue<bool>("show-trajectory");
+    Mod::get()->setSettingValue<bool>("show-trajectory", now);
+    traj::TrajectorySimulator::get().setShowTrajectory(now);
 }
 
 }
@@ -85,12 +98,25 @@ class $modify(BotPauseHook, PauseLayer) {
     }
 };
 
-// F1 toggles bot in-game. Hard-coded for now; user can swap key easily.
+// In-game keybinds:
+//   F1 / Z — toggle bot
+//   X      — toggle bot trajectory visualization
+//   C      — toggle regular trajectory simulation
 class $modify(BotKeybindHook, PlayLayer) {
     void keyDown(cocos2d::enumKeyCodes key, double timestamp) {
-        if (key == cocos2d::enumKeyCodes::KEY_F1) {
-            toggleBotEnabled();
-            return;
+        switch (key) {
+            case cocos2d::enumKeyCodes::KEY_F1:
+            case cocos2d::enumKeyCodes::KEY_Z:
+                toggleBotEnabled();
+                return;
+            case cocos2d::enumKeyCodes::KEY_X:
+                toggleShowBotTraj();
+                return;
+            case cocos2d::enumKeyCodes::KEY_C:
+                toggleShowTrajectory();
+                return;
+            default:
+                break;
         }
         PlayLayer::keyDown(key, timestamp);
     }

@@ -70,6 +70,10 @@ void BotViz::render() {
 
     auto& bot = Bot::get();
     if (!bot.enabled()) return;
+    // Master viz gate (toggled via X keybind / "show-bot-trajectory" setting).
+    // Best-path overlay AND candidate traces both off when this is false; the
+    // bot itself keeps running in the background — only rendering is muted.
+    if (!bot.showBotTraj()) return;
 
     // Per-candidate traces drawn first, in each path's author-chosen color.
     // These are this-frame's predicted trajectories for every enabled,
