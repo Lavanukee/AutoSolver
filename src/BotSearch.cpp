@@ -111,6 +111,8 @@ void Bot::runSearch() {
             bp.died               = res.died;
             bp.samples            = std::move(res.positions);
             bp.samples2           = std::move(res.positions2);
+            bp.samplesYVel        = std::move(res.yVels);
+            bp.samples2YVel       = std::move(res.yVels2);
             winner = std::move(bp);
         }
     }
@@ -164,6 +166,8 @@ void Bot::runSearch() {
                                             : bestRes.positions.back();
             winner.samples            = std::move(bestRes.positions);
             winner.samples2           = std::move(bestRes.positions2);
+            winner.samplesYVel        = std::move(bestRes.yVels);
+            winner.samples2YVel       = std::move(bestRes.yVels2);
             winnerScore.framesSurvived = bestSurvival;
             winnerScore.endX           = winner.samples.empty() ? 0.f : winner.samples.back().x;
             winnerScore.died           = bestRes.died;

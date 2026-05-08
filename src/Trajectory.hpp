@@ -16,6 +16,12 @@ struct PlanResult {
     // MIN of P1 and P2 survival (the plan is "alive" only while BOTH are).
     std::vector<cocos2d::CCPoint> positions;
     std::vector<cocos2d::CCPoint> positions2;
+    // Per-tick sim yVelocity — yVels[i+1] is sim's m_yVelocity AFTER frame i.
+    // yVels[0] is the sim's pre-tick yVel after initSim (= base->m_yVelocity).
+    // Recorded in lockstep with positions so divergence diagnostics can compare
+    // sim_yVel vs real yVel at the same tick. yVels2 mirrors for P2 in dual.
+    std::vector<float>            yVels;
+    std::vector<float>            yVels2;
     int  framesSurvived = 0;
     bool died = false;
 };

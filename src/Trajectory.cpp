@@ -494,9 +494,13 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
 
     result.positions.reserve(plan.size() + 1);
     result.positions.push_back(simA->getPosition());
+    result.yVels.reserve(plan.size() + 1);
+    result.yVels.push_back(simA->m_yVelocity);
     if (simB) {
         result.positions2.reserve(plan.size() + 1);
         result.positions2.push_back(simB->getPosition());
+        result.yVels2.reserve(plan.size() + 1);
+        result.yVels2.push_back(simB->m_yVelocity);
     }
 
     // Independent P2 plan only meaningful when simB exists; otherwise P2
@@ -518,6 +522,29 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
             wantB = wantA;
         }
 
+        // checkCollisions BEFORE the button flip — mirrors the bot's reality
+        // path, where BotPlayerObjectHook::update pushes the button PRE-super
+        // (after the engine's per-tick checkCollisions has already run with
+        // the OLD button state). If we flipped the button before checkCollisions
+        // here, sim's checkCollisions would see a held button on the ground-
+        // touch tick and set m_jumpBuffered, giving a buffered jump impulse on
+        // the next update(); reality misses that because the button isn't held
+        // when its checkCollisions runs. Result was sim's post-jump yVel
+        // sitting +0.216 (= one gravity step) above reality's, accumulating
+        // +0.0486 of position drift per tick. Order-aligning the flip kills
+        // that signature.
+        simA->resetCollisionLog(true);
+        clearPerTickRingOverlap(simA);
+        m_pl->checkCollisions(simA, m_frameDt, false);
+        if (isSimDead(simA)) { result.died = true; break; }
+
+        if (simB) {
+            simB->resetCollisionLog(true);
+            clearPerTickRingOverlap(simB);
+            m_pl->checkCollisions(simB, m_frameDt, false);
+            if (isSimDead(simB)) { result.died = true; break; }
+        }
+
         if (firstA || wantA != prevA) {
             if (wantA) simA->pushButton(PlayerButton::Jump);
             else       simA->releaseButton(PlayerButton::Jump);
@@ -531,23 +558,15 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
             firstB = false;
         }
 
-        simA->resetCollisionLog(true);
-        clearPerTickRingOverlap(simA);
-        m_pl->checkCollisions(simA, m_frameDt, false);
-        if (isSimDead(simA)) { result.died = true; break; }
-
-        if (simB) {
-            simB->resetCollisionLog(true);
-            clearPerTickRingOverlap(simB);
-            m_pl->checkCollisions(simB, m_frameDt, false);
-            if (isSimDead(simB)) { result.died = true; break; }
-        }
-
         simA->update(m_frameDt);
         if (simB) simB->update(m_frameDt);
 
         result.positions.push_back(simA->getPosition());
-        if (simB) result.positions2.push_back(simB->getPosition());
+        result.yVels.push_back(simA->m_yVelocity);
+        if (simB) {
+            result.positions2.push_back(simB->getPosition());
+            result.yVels2.push_back(simB->m_yVelocity);
+        }
         ++result.framesSurvived;
     }
 

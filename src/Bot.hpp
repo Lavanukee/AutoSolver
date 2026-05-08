@@ -34,6 +34,13 @@ struct BestPath {
     // P1 per-frame positions; samples2 populated only in dual mode.
     std::vector<cocos2d::CCPoint>     samples;
     std::vector<cocos2d::CCPoint>     samples2;
+    // Sim's per-tick yVelocity recorded in lockstep with samples — index 0 is
+    // pre-tick, index k+1 is post-tick of plan[k]. Used by advanceFrame's
+    // divergence diagnostics to compare sim_yVel vs real yVel directly so we
+    // can localize where physics divergence enters (gravity step, collision
+    // resolution, jump impulse, etc.). samplesYVel2 mirrors for P2.
+    std::vector<float>                samplesYVel;
+    std::vector<float>                samples2YVel;
 
     bool empty() const { return plan.empty(); }
     bool covers(int64_t absFrame) const {

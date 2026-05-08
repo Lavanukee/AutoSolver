@@ -1,16 +1,63 @@
 #include "Bot.hpp"
 #include "BotViz.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <ctime>
 
 namespace bot {
 
 namespace {
-// Log when the real player's post-tick position differs from the simulator's
-// predicted post-tick position by more than this many world units. Squared so
-// we can compare without sqrt.
-constexpr float kDivergenceLogDist    = 0.5f;
+// Catch the earliest tick a divergence appears. With the file logger below
+// (no rate limit, every drift > this threshold is recorded), we want to see
+// micro-drift that compounds — alternating-input bugs typically show up as
+// a handful of small early divergences before the path visibly diverges.
+constexpr float kDivergenceLogDist    = 0.05f;
 constexpr float kDivergenceLogDistSq  = kDivergenceLogDist * kDivergenceLogDist;
+
+// Diagnostic divergence log at a fixed path so the user (running GD direct
+// through Steam, no live geode log access) can share it post-session.
+// Truncated on every PlayLayer init — one file per level entry. Single
+// engine-thread access, so no mutex; flushed every line so a crash loses at
+// most the in-flight write.
+constexpr char const* kDivLogPath =
+    "/Users/jedd/Desktop/GeometryDash/Autosolver/divergence.log";
+FILE* g_divLog = nullptr;
+
+void divlogOpenTruncate() {
+    if (g_divLog) { std::fclose(g_divLog); g_divLog = nullptr; }
+    g_divLog = std::fopen(kDivLogPath, "w");
+    if (!g_divLog) return;
+    std::time_t t = std::time(nullptr);
+    std::fprintf(g_divLog, "# autosolver divergence log — session %s",
+                 std::ctime(&t));
+    std::fprintf(g_divLog,
+        "# fields: tick=240Hz physics frame; idx=offset into plan; "
+        "pStart=plan start frame; pred=(x,y) sim post-tick prediction; "
+        "actual=(x,y) real post-tick position; d=(dx,dy) dist=sqrt; "
+        "yVel=real player; simYVel=sim's yVel for the same tick; "
+        "dYVel=simYVel-yVel (positive=sim faster upward); "
+        "gravity/speed=real player; gnd=g1/g2/g3/g4; "
+        "btnWant=plan input THIS tick; btnHeld=real button state; "
+        "plan=binary context, [x] marks THIS tick\n");
+    std::fflush(g_divLog);
+}
+
+void divlogClose() {
+    if (g_divLog) { std::fclose(g_divLog); g_divLog = nullptr; }
+}
+
+void divlogf(char const* fmt, ...) {
+    if (!g_divLog) return;
+    std::va_list args;
+    va_start(args, fmt);
+    std::vfprintf(g_divLog, fmt, args);
+    va_end(args);
+    std::fputc('\n', g_divLog);
+    std::fflush(g_divLog);
+}
 }
 
 
@@ -31,6 +78,7 @@ void Bot::onPlayLayerInit(PlayLayer* pl) {
     m_best        = BestPath{};
     m_candidateTraces.clear();
     BotViz::get().onPlayLayerInit(pl);
+    divlogOpenTruncate();
 }
 
 void Bot::onPlayLayerReset() {
@@ -54,6 +102,7 @@ void Bot::onPlayLayerQuit() {
     m_levelReady = false;
     m_best       = BestPath{};
     m_candidateTraces.clear();
+    divlogClose();
 }
 
 void Bot::setEnabled(bool e) {
@@ -180,26 +229,66 @@ void Bot::advanceFrame() {
             float const dx = pred.x - actual.x;
             float const dy = pred.y - actual.y;
             float const distSq = dx * dx + dy * dy;
-            // Rate-limit at 240Hz: a level with active drift would log every
-            // tick and tank performance through fmt formatting alone. One
-            // log per ~60 ticks (4×/sec) is plenty to characterize divergence
-            // patterns without dominating the frame budget.
-            if (distSq > kDivergenceLogDistSq && (m_frame - m_lastDivergenceLogFrame) >= 60) {
-                m_lastDivergenceLogFrame = m_frame;
+            if (distSq > kDivergenceLogDistSq) {
                 auto* p = m_pl->m_player1;
                 bool const want = inputForCurrentFrame();
                 bool const held = p->buttonDown(PlayerButton::Jump);
-                geode::log::warn(
-                    "[divergence] tick={} pred=({:.2f},{:.2f}) actual=({:.2f},{:.2f}) "
-                    "delta=({:+.3f},{:+.3f}) dist={:.3f} "
-                    "onGnd={}/{}/{}/{} yVel={:.3f} gravity={:.2f} speed={:.2f} "
-                    "jumpBuf={} touchedGravPortal={} btnWant={} btnHeld={}",
-                    m_frame, pred.x, pred.y, actual.x, actual.y,
-                    dx, dy, std::sqrt(distSq),
-                    p->m_isOnGround, p->m_isOnGround2, p->m_isOnGround3, p->m_isOnGround4,
-                    p->m_yVelocity, p->m_gravityMod, p->m_playerSpeed,
-                    p->m_jumpBuffered, p->m_touchedGravityPortal,
-                    want, held);
+
+                // Plan binary context [idx-5 .. idx+5], with [.] bracketing
+                // THIS tick's input. Lets us spot alternating-input patterns
+                // (e.g. "0101[0]1010") just by eyeballing the log.
+                char planCtx[24] = {0};
+                size_t ctxLen = 0;
+                int64_t const planSize = static_cast<int64_t>(m_best.plan.size());
+                int64_t const lo = std::max<int64_t>(idx - 5, 0);
+                int64_t const hi = std::min<int64_t>(idx + 5, planSize - 1);
+                for (int64_t i = lo; i <= hi && ctxLen < sizeof(planCtx) - 4; ++i) {
+                    if (i == idx) planCtx[ctxLen++] = '[';
+                    planCtx[ctxLen++] = m_best.plan[static_cast<size_t>(i)] ? '1' : '0';
+                    if (i == idx) planCtx[ctxLen++] = ']';
+                }
+                planCtx[ctxLen] = '\0';
+
+                // Sim's yVel for the same tick (post-tick of plan[idx]).
+                // samplesYVel is recorded in lockstep with samples — so the
+                // index matching pred is the same predIdx. dyVel = sim - real,
+                // i.e. positive means sim is higher upward.
+                float simYVel  = 0.f;
+                float dyVel    = 0.f;
+                bool  haveYVel = false;
+                if (predIdx < m_best.samplesYVel.size()) {
+                    simYVel = m_best.samplesYVel[predIdx];
+                    dyVel   = simYVel - p->m_yVelocity;
+                    haveYVel = true;
+                }
+
+                divlogf("tick=%lld idx=%lld pStart=%lld "
+                        "pred=(%.3f,%.3f) actual=(%.3f,%.3f) "
+                        "d=(%+.4f,%+.4f) dist=%.4f "
+                        "yVel=%.4f simYVel=%.4f dYVel=%+.4f%s "
+                        "gravity=%.3f speed=%.3f "
+                        "gnd=%d/%d/%d/%d btnWant=%d btnHeld=%d "
+                        "jumpBuf=%d gravPortal=%d plan=%s",
+                        (long long)m_frame, (long long)idx, (long long)m_best.planStart,
+                        pred.x, pred.y, actual.x, actual.y,
+                        dx, dy, std::sqrt(distSq),
+                        p->m_yVelocity, simYVel, dyVel, haveYVel ? "" : "(noYVel)",
+                        p->m_gravityMod, p->m_playerSpeed,
+                        (int)p->m_isOnGround, (int)p->m_isOnGround2,
+                        (int)p->m_isOnGround3, (int)p->m_isOnGround4,
+                        (int)want, (int)held,
+                        (int)p->m_jumpBuffered, (int)p->m_touchedGravityPortal,
+                        planCtx);
+
+                // Rate-limited geode log mirror — keeps live debugging usable
+                // for runs where the user CAN see geode logs, without spamming
+                // when running through Steam (file log is the source of truth).
+                if ((m_frame - m_lastDivergenceLogFrame) >= 60) {
+                    m_lastDivergenceLogFrame = m_frame;
+                    geode::log::warn(
+                        "[divergence] tick={} dist={:.3f} (full state in divergence.log)",
+                        m_frame, std::sqrt(distSq));
+                }
             }
         }
     }
