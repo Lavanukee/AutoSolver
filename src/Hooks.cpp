@@ -303,6 +303,36 @@ class $modify(TrajBaseLayerHook, GJBaseGameLayer) {
         GJBaseGameLayer::playSpeedParticle(timeMod);
     }
 
+    // Mode-switch portals (cube/ship/ball/ufo/robot/spider — every non-free
+    // mode) call animatePortalY to tween the camera-Y bound that defines the
+    // playable area, plus the animate*Ground functions to slide the visible
+    // ground/ceiling bars into the new bounds. The instantaneous values
+    // (m_portalY, m_groundLayer position) are snapshotted/restored by
+    // LayerStateSnapshot, but the CCActions kicked off by these functions
+    // keep running on the layer past sim end, re-positioning the real
+    // ground/ceiling for several frames AFTER the snapshot has tried to
+    // restore. Result: the user sees the area bounds change preemptively when
+    // the sim crosses a mode portal, even though the real player hasn't
+    // crossed yet. Suppress at source during sim — the sim doesn't care about
+    // visible ground bars; its physics works off m_portalY which the snapshot
+    // handles.
+    void animatePortalY(float fromY, float toY, float duration, float easingRate) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::animatePortalY(fromY, toY, duration, easingRate);
+    }
+    void animateInDualGroundNew(GameObject* object, float height, bool instant, float duration) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::animateInDualGroundNew(object, height, instant, duration);
+    }
+    void animateInGroundNew(bool unk1, float unk2, bool unk3) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::animateInGroundNew(unk1, unk2, unk3);
+    }
+    void animateOutGroundNew(bool instant) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::animateOutGroundNew(instant);
+    }
+
     // Camera-tween CCActions. Same problem class as shakeCamera/moveCameraToPos:
     // the snapshot reverts m_cameraPosition but the action keeps running and
     // re-applies the tween to the real game. Suppress at source.
@@ -397,6 +427,39 @@ class $modify(TrajPlayerObjectHook, PlayerObject) {
     }
 };
 
+// GJBaseGameLayer-level updateTimeMod is the chokepoint that speed-portal
+// activations route through. The per-player virtual hook above catches
+// `m_player1->updateTimeMod()` style calls — but the engine's binary impl of
+// the LAYER's updateTimeMod also writes m_playerSpeed (and m_playerSpeedAC)
+// inline on m_player1/m_player2 BEFORE delegating to the per-player virtual.
+// Those inline writes bypass the per-player gate, so saving/restoring real
+// player speeds around the super call is the only complete fix. Keeping the
+// per-player gate ensures the per-player virtual is still blocked for the
+// real player (so visual side effects on the real player don't fire).
+class $modify(TrajLayerSpeedHook, GJBaseGameLayer) {
+    void updateTimeMod(float speed, bool players, bool noEffects) {
+        auto& s = sim();
+        if (s.isSimulating()) {
+            auto* pl = s.playLayer();
+            float ps1 = (pl && pl->m_player1) ? pl->m_player1->m_playerSpeed   : 0.f;
+            float ac1 = (pl && pl->m_player1) ? pl->m_player1->m_playerSpeedAC : 0.f;
+            float ps2 = (pl && pl->m_player2) ? pl->m_player2->m_playerSpeed   : 0.f;
+            float ac2 = (pl && pl->m_player2) ? pl->m_player2->m_playerSpeedAC : 0.f;
+            GJBaseGameLayer::updateTimeMod(speed, players, noEffects);
+            if (pl && pl->m_player1) {
+                pl->m_player1->m_playerSpeed   = ps1;
+                pl->m_player1->m_playerSpeedAC = ac1;
+            }
+            if (pl && pl->m_player2) {
+                pl->m_player2->m_playerSpeed   = ps2;
+                pl->m_player2->m_playerSpeedAC = ac2;
+            }
+            return;
+        }
+        GJBaseGameLayer::updateTimeMod(speed, players, noEffects);
+    }
+};
+
 class $modify(TrajEffectHook, EffectGameObject) {
     // Speed-modifier portals (m_speedModType != 0) MUST fire during sim —
     // they're how the sim's PlayerObject::m_playerSpeed updates so lookahead
@@ -420,13 +483,36 @@ class $modify(TrajEffectHook, EffectGameObject) {
     //
     // Save-and-restore wrapper keeps sim physics speed-aware while leaving the
     // portal's "has the real player activated me?" state untouched.
+    // Real-player speed save/restore around the super call. Speed portals
+    // dispatch into GJBaseGameLayer::updateTimeMod(speed, players=true,
+    // noEffects=true), which writes m_player1/m_player2->m_playerSpeed
+    // INLINE — bypassing the PlayerObject::updateTimeMod virtual our existing
+    // TrajPlayerObjectHook gates. Symptom without this: when the sim crosses
+    // a speed portal, the real players' m_playerSpeed flips to the new value
+    // immediately, even though the real player hasn't reached the portal —
+    // they accelerate/decelerate on the spot. Saving + restoring the real
+    // player speeds across the super call neutralizes the inline write while
+    // still letting the sim's PlayerObject::updateTimeMod virtual fire (it's
+    // not blocked for sim players, so sim physics still picks up the new
+    // speed for accurate prediction).
+    static void saveRestoreRealPlayerSpeeds(auto&& body) {
+        auto* pl = sim().playLayer();
+        float ps1 = (pl && pl->m_player1) ? pl->m_player1->m_playerSpeed : 0.f;
+        float ps2 = (pl && pl->m_player2) ? pl->m_player2->m_playerSpeed : 0.f;
+        body();
+        if (pl && pl->m_player1) pl->m_player1->m_playerSpeed = ps1;
+        if (pl && pl->m_player2) pl->m_player2->m_playerSpeed = ps2;
+    }
+
     void triggerObject(GJBaseGameLayer* layer, int uniqueID,
                        gd::vector<int> const* remapKeys) {
         if (sim().isSimulating()) {
             if (!isSpeedMod()) return;
             bool prev1 = m_activatedByPlayer1;
             bool prev2 = m_activatedByPlayer2;
-            EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
+            saveRestoreRealPlayerSpeeds([&]{
+                EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
+            });
             m_activatedByPlayer1 = prev1;
             m_activatedByPlayer2 = prev2;
             return;
@@ -439,7 +525,9 @@ class $modify(TrajEffectHook, EffectGameObject) {
             if (!isSpeedMod()) return;
             bool prev1 = m_activatedByPlayer1;
             bool prev2 = m_activatedByPlayer2;
-            EffectGameObject::triggerActivated(xPosition);
+            saveRestoreRealPlayerSpeeds([&]{
+                EffectGameObject::triggerActivated(xPosition);
+            });
             m_activatedByPlayer1 = prev1;
             m_activatedByPlayer2 = prev2;
             return;

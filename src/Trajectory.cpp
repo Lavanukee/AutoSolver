@@ -426,6 +426,47 @@ void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
     sim->copyAttributes(base);
     sim->m_gravityMod = base->m_gravityMod;
     sim->m_isOnGround = base->m_isOnGround;
+    // Wave-on-ground Y-offset hunt: pinning down which fields copyAttributes
+    // is dropping. See docs/issue-wave-ground-y-offset.md. Fields grouped by
+    // role:
+    //   - sliding/slope state (engine consults during ground-contact resolve)
+    //   - surface-material / categorized ground state
+    //   - collision/landing pointers (ground reference object, side-collide)
+    //   - jump-buffer/landing/slope booleans (round-2 fix from earlier)
+    //   - vehicle hitbox size (last because it'd visibly disrupt cube too if
+    //     it was the issue, and cube is precise — but harmless to copy)
+    sim->m_isSliding                     = base->m_isSliding;
+    sim->m_maybeSlopeForce               = base->m_maybeSlopeForce;
+    sim->m_slopeAngle                    = base->m_slopeAngle;
+    sim->m_slopeSlidingMaybeRotated      = base->m_slopeSlidingMaybeRotated;
+    sim->m_isOnIce                       = base->m_isOnIce;
+    sim->m_maybeGoingCorrectSlopeDirection = base->m_maybeGoingCorrectSlopeDirection;
+    sim->m_maybeUpsideDownSlope          = base->m_maybeUpsideDownSlope;
+    sim->m_groundObjectMaterial          = base->m_groundObjectMaterial;
+    sim->m_stateOnGround                 = base->m_stateOnGround;
+    sim->m_lastGroundObject              = base->m_lastGroundObject;
+    sim->m_preLastGroundObject           = base->m_preLastGroundObject;
+    sim->m_currentSlope2                 = base->m_currentSlope2;
+    sim->m_collidedObject                = base->m_collidedObject;
+    sim->m_collidingWithLeft             = base->m_collidingWithLeft;
+    sim->m_collidingWithRight            = base->m_collidingWithRight;
+    sim->m_jumpBuffered                  = base->m_jumpBuffered;
+    sim->m_wasJumpBuffered               = base->m_wasJumpBuffered;
+    sim->m_stateJumpBuffered             = base->m_stateJumpBuffered;
+    sim->m_isOnGround2                   = base->m_isOnGround2;
+    sim->m_isOnGround3                   = base->m_isOnGround3;
+    sim->m_isOnGround4                   = base->m_isOnGround4;
+    sim->m_lastLandTime                  = base->m_lastLandTime;
+    sim->m_lastGroundedPos               = base->m_lastGroundedPos;
+    sim->m_isOnSlope                     = base->m_isOnSlope;
+    sim->m_wasOnSlope                    = base->m_wasOnSlope;
+    sim->m_slopeVelocity                 = base->m_slopeVelocity;
+    sim->m_vehicleSize                   = base->m_vehicleSize;
+    // Explicit position re-sync. copyAttributes likely already covers CCNode
+    // position (cube-sim alignment was perfect post-round-1), but this is a
+    // belt-and-suspenders no-op for cube while guaranteeing wave-mode's
+    // CCNode position can't drift from the {0,105} createSimPlayer default.
+    sim->setPosition(base->getPosition());
     clearSimRingState(sim);
     m_activated.clear();
     clearSimDestroyed();
@@ -474,6 +515,38 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
         sim->copyAttributes(base);
         sim->m_gravityMod = base->m_gravityMod;
         sim->m_isOnGround = base->m_isOnGround;
+        // Same wave-suspect explicit-copy block as runBranch — see
+        // docs/issue-wave-ground-y-offset.md. Both code paths must seed the
+        // sim from base identically, otherwise runPlan's prediction drifts
+        // from runBranch's visual at frame 0.
+        sim->m_isSliding                       = base->m_isSliding;
+        sim->m_maybeSlopeForce                 = base->m_maybeSlopeForce;
+        sim->m_slopeAngle                      = base->m_slopeAngle;
+        sim->m_slopeSlidingMaybeRotated        = base->m_slopeSlidingMaybeRotated;
+        sim->m_isOnIce                         = base->m_isOnIce;
+        sim->m_maybeGoingCorrectSlopeDirection = base->m_maybeGoingCorrectSlopeDirection;
+        sim->m_maybeUpsideDownSlope            = base->m_maybeUpsideDownSlope;
+        sim->m_groundObjectMaterial            = base->m_groundObjectMaterial;
+        sim->m_stateOnGround                   = base->m_stateOnGround;
+        sim->m_lastGroundObject                = base->m_lastGroundObject;
+        sim->m_preLastGroundObject             = base->m_preLastGroundObject;
+        sim->m_currentSlope2                   = base->m_currentSlope2;
+        sim->m_collidedObject                  = base->m_collidedObject;
+        sim->m_collidingWithLeft               = base->m_collidingWithLeft;
+        sim->m_collidingWithRight              = base->m_collidingWithRight;
+        sim->m_jumpBuffered                    = base->m_jumpBuffered;
+        sim->m_wasJumpBuffered                 = base->m_wasJumpBuffered;
+        sim->m_stateJumpBuffered               = base->m_stateJumpBuffered;
+        sim->m_isOnGround2                     = base->m_isOnGround2;
+        sim->m_isOnGround3                     = base->m_isOnGround3;
+        sim->m_isOnGround4                     = base->m_isOnGround4;
+        sim->m_lastLandTime                    = base->m_lastLandTime;
+        sim->m_lastGroundedPos                 = base->m_lastGroundedPos;
+        sim->m_isOnSlope                       = base->m_isOnSlope;
+        sim->m_wasOnSlope                      = base->m_wasOnSlope;
+        sim->m_slopeVelocity                   = base->m_slopeVelocity;
+        sim->m_vehicleSize                     = base->m_vehicleSize;
+        sim->setPosition(base->getPosition());
         clearSimRingState(sim);
         clearSimDead(sim);
     };
