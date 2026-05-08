@@ -367,6 +367,21 @@ void TrajectorySimulator::clearSimRingState(PlayerObject* sim) {
     sim->m_jumpPadRelated.clear();
 }
 
+void TrajectorySimulator::clearPerTickRingOverlap(PlayerObject* sim) {
+    if (!sim) return;
+    // Only the "currently overlapping this tick" state. checkCollisions will
+    // re-add via playerTouchedRing for orbs the sim is genuinely overlapping
+    // right now. m_touchedRing/m_touchedCustomRing are per-tick edge-detect
+    // bools the engine sets on first overlap; clearing them mirrors the
+    // engine's own tick-start clear and keeps the bot from seeing stale
+    // "touched a ring last tick" state when the sim has moved past.
+    sim->m_touchedRing       = false;
+    sim->m_touchedCustomRing = false;
+    if (sim->m_touchingRings) {
+        sim->m_touchingRings->removeAllObjects();
+    }
+}
+
 void TrajectorySimulator::simulate() {
     if (!m_show || !m_pl || !m_simP1 || !m_simP2) return;
     if (!m_levelReady) return;
@@ -419,6 +434,7 @@ void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
     for (int i = 0; i < m_iterations; ++i) {
         cocos2d::CCPoint prev = sim->getPosition();
         sim->resetCollisionLog(true);
+        clearPerTickRingOverlap(sim);
         m_pl->checkCollisions(sim, m_frameDt, false);
         if (isSimDead(sim)) break;
 
@@ -502,11 +518,13 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
         }
 
         simA->resetCollisionLog(true);
+        clearPerTickRingOverlap(simA);
         m_pl->checkCollisions(simA, m_frameDt, false);
         if (isSimDead(simA)) { result.died = true; break; }
 
         if (simB) {
             simB->resetCollisionLog(true);
+            clearPerTickRingOverlap(simB);
             m_pl->checkCollisions(simB, m_frameDt, false);
             if (isSimDead(simB)) { result.died = true; break; }
         }

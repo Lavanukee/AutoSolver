@@ -98,6 +98,18 @@ private:
     // real player is near. Reset those fields to give each branch a clean slate.
     void clearSimRingState(PlayerObject* sim);
 
+    // Per-tick "current overlap" reset. Called BEFORE checkCollisions inside
+    // every sim step so the engine's per-tick ring-overlap detection starts
+    // from an empty array; any orb returned by collision is added freshly,
+    // and stale orbs from prior ticks (where the sim was overlapping but no
+    // longer is) are dropped. Without this, m_touchingRings accumulates
+    // across ticks and sim's ringJump fires on orbs the sim has already
+    // physically left — the "ghost orb activation" symptom.
+    //
+    // Narrower than clearSimRingState: leaves dash/ring-jump-state alone so
+    // mid-flight dash physics stays continuous between ticks.
+    void clearPerTickRingOverlap(PlayerObject* sim);
+
     PlayLayer*           m_pl{nullptr};
     PlayerObject*        m_simP1{nullptr};
     PlayerObject*        m_simP2{nullptr};

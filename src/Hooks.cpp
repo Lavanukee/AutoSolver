@@ -96,6 +96,24 @@ class $modify(TrajBaseLayerHook, GJBaseGameLayer) {
         GJBaseGameLayer::handleButton(down, button, isPlayer1);
     }
 
+    // Suppress object destruction (breakable blocks, explosion-target objects,
+    // anything else routed through this method) when the sim is the cause.
+    // The engine's destroyObject path removes the object from the level's
+    // active set and runs spawn-remove triggers — both of those persist past
+    // any LayerStateSnapshot we currently capture, so a sim-broken block is
+    // gone for the real player too. Conservative: sim physics will see the
+    // block as still solid (collide / die against it). The real player will
+    // either avoid it or break it through their own gameplay path; either is
+    // safer than corrupting the level state.
+    //
+    // destroyPlayer is a separate, already-hooked path (the cascading-dual
+    // suppression at PlayLayer::destroyPlayer); this only catches GameObject
+    // destruction, which is the breakable-block / similar-object route.
+    void destroyObject(GameObject* object) {
+        if (sim().isSimulating()) return;
+        GJBaseGameLayer::destroyObject(object);
+    }
+
     void collisionCheckObjects(PlayerObject* player, gd::vector<GameObject*>* vec,
                                int objectsCount, float dt) {
         auto& s = sim();
@@ -373,14 +391,43 @@ class $modify(TrajEffectHook, EffectGameObject) {
     // visual children attached to shared GameObjects.
     bool isSpeedMod() const { return m_speedModType != 0; }
 
+    // Speed-mod special-case: sim DOES need the engine to add the portal to
+    // PlayLayer::m_speedObjects (so sim physics picks up the new speed during
+    // its runPlan), but the engine also writes m_activatedByPlayer1/2 on the
+    // portal itself. m_speedObjects is rolled back by LayerStateSnapshot at
+    // runPlan boundaries; the per-object activation flags are NOT in the
+    // snapshot, so without explicit rollback they leak across runPlans —
+    // when the real player eventually reaches the portal, hasBeenActivatedByPlayer
+    // returns true (set by the sim's earlier crossing) and the engine refuses to
+    // re-fire the trigger. Real player keeps old speed → diverges from the
+    // path the bot just committed → premature death.
+    //
+    // Save-and-restore wrapper keeps sim physics speed-aware while leaving the
+    // portal's "has the real player activated me?" state untouched.
     void triggerObject(GJBaseGameLayer* layer, int uniqueID,
                        gd::vector<int> const* remapKeys) {
-        if (sim().isSimulating() && !isSpeedMod()) return;
+        if (sim().isSimulating()) {
+            if (!isSpeedMod()) return;
+            bool prev1 = m_activatedByPlayer1;
+            bool prev2 = m_activatedByPlayer2;
+            EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
+            m_activatedByPlayer1 = prev1;
+            m_activatedByPlayer2 = prev2;
+            return;
+        }
         EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
     }
 
     void triggerActivated(float xPosition) {
-        if (sim().isSimulating() && !isSpeedMod()) return;
+        if (sim().isSimulating()) {
+            if (!isSpeedMod()) return;
+            bool prev1 = m_activatedByPlayer1;
+            bool prev2 = m_activatedByPlayer2;
+            EffectGameObject::triggerActivated(xPosition);
+            m_activatedByPlayer1 = prev1;
+            m_activatedByPlayer2 = prev2;
+            return;
+        }
         EffectGameObject::triggerActivated(xPosition);
     }
 };
