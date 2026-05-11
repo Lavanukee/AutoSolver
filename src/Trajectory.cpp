@@ -1,6 +1,8 @@
 #include "Trajectory.hpp"
 
 #include <cmath>
+#include <cstddef>
+#include <cstring>
 
 using namespace geode::prelude;
 
@@ -62,6 +64,43 @@ struct LayerStateSnapshot {
     // Pointers only — items are owned elsewhere; we're not refcounting.
     std::vector<cocos2d::CCObject*> speedObjects;
 
+    // m_groundLayer / m_groundLayer2 are the visible ground/ceiling bars.
+    // Mode-portal handlers update their positions synchronously AND start
+    // CCAction tweens for the visible slide-in. Sim's ball-mode physics reads
+    // these positions for ground/ceiling resolve (this is the regression
+    // vector for the ball-portal vertical-line bug — suppressing animate*Ground
+    // wholesale leaves sim's ball physics with stale ground refs).
+    //
+    // Solution: let the animate*Ground calls run unconditionally for sim, so
+    // sim gets the correct ground refs DURING runPlan; at runPlan boundary,
+    // restore the node positions to pre-sim values AND stopAllActions on
+    // them to cancel the visible tweens. Real game sees no leak because the
+    // CCActions never get a chance to step within the synchronous runPlan,
+    // and we strip them before yielding back to the engine's update loop.
+    cocos2d::CCPoint groundLayerPos;
+    cocos2d::CCPoint groundLayer2Pos;
+    cocos2d::CCPoint middlegroundPos;
+    bool             hadGroundLayer{false};
+    bool             hadGroundLayer2{false};
+    bool             hadMiddleground{false};
+    float            middleGroundOffsetY{0.f};
+
+    // POD prefix of GJGameState. The struct starts with ~30 m_unkPoint fields,
+    // many m_unkFloat/m_unkInt/m_unkBool fields, and named fields like
+    // m_cameraZoom/m_portalY/m_levelFlipping — all POD up to m_spawnChannelRelated0
+    // (the first non-POD member, a gd::unordered_map). Snapshotting the entire
+    // prefix as raw bytes captures every play-area / camera / portal-related
+    // POD field at once, without having to enumerate each unknown field.
+    //
+    // Used to plug the ball-portal "gameplay-area leak" — sim crossing a ball
+    // portal mutates some POD field on GJGameState that wasn't covered by the
+    // explicit per-field captures (ground bar positions, m_portalY,
+    // m_middleGroundOffsetY all fail to plug it). Brute-force capturing the
+    // whole POD prefix sidesteps the field-identification problem.
+    static constexpr size_t kGameStatePodSize =
+        offsetof(GJGameState, m_spawnChannelRelated0);
+    unsigned char gameStatePodPrefix[kGameStatePodSize]{};
+
     void capture(PlayLayer* p) {
         pl = p;
         if (!pl) return;
@@ -99,6 +138,14 @@ struct LayerStateSnapshot {
                 speedObjects.push_back(arr->objectAtIndex(i));
             }
         }
+        hadGroundLayer  = pl->m_groundLayer  != nullptr;
+        hadGroundLayer2 = pl->m_groundLayer2 != nullptr;
+        hadMiddleground = pl->m_middleground != nullptr;
+        if (hadGroundLayer)  groundLayerPos  = pl->m_groundLayer->getPosition();
+        if (hadGroundLayer2) groundLayer2Pos = pl->m_groundLayer2->getPosition();
+        if (hadMiddleground) middlegroundPos = pl->m_middleground->getPosition();
+        middleGroundOffsetY = gs.m_middleGroundOffsetY;
+        std::memcpy(gameStatePodPrefix, &gs, kGameStatePodSize);
     }
     void restore() {
         if (!pl) return;
@@ -135,6 +182,31 @@ struct LayerStateSnapshot {
                 if (obj) arr->addObject(obj);
             }
         }
+        // Cancel any ground-bar CCAction tweens started during sim, then
+        // restore the bar positions. Both halves are needed: stopping the
+        // actions alone leaves the bar at its post-sim position; restoring
+        // position alone lets the stopped-but-still-stepping action pull it
+        // back during the next engine tick. Also clears actions on the layer
+        // itself in case the engine attaches the gameplay-area tween there.
+        if (hadGroundLayer && pl->m_groundLayer) {
+            pl->m_groundLayer->stopAllActions();
+            pl->m_groundLayer->setPosition(groundLayerPos);
+        }
+        if (hadGroundLayer2 && pl->m_groundLayer2) {
+            pl->m_groundLayer2->stopAllActions();
+            pl->m_groundLayer2->setPosition(groundLayer2Pos);
+        }
+        if (hadMiddleground && pl->m_middleground) {
+            pl->m_middleground->stopAllActions();
+            pl->m_middleground->setPosition(middlegroundPos);
+        }
+        gs.m_middleGroundOffsetY = middleGroundOffsetY;
+        // Brute-force POD-prefix restore. Comes LAST so it overrides every
+        // per-field write above with the snapshot bytes — meaning any field
+        // we missed in the explicit per-field captures gets bit-for-bit
+        // restored. Safe because the prefix is pure POD; non-POD members
+        // (m_spawnChannelRelated0 onwards) are not touched.
+        std::memcpy(&gs, gameStatePodPrefix, kGameStatePodSize);
     }
 };
 
