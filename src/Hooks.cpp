@@ -426,35 +426,53 @@ class $modify(TrajPlayerObjectHook, PlayerObject) {
 };
 
 // GJBaseGameLayer-level updateTimeMod is the chokepoint that speed-portal
-// activations route through. The per-player virtual hook above catches
-// `m_player1->updateTimeMod()` style calls — but the engine's binary impl of
-// the LAYER's updateTimeMod also writes m_playerSpeed (and m_playerSpeedAC)
-// inline on m_player1/m_player2 BEFORE delegating to the per-player virtual.
-// Those inline writes bypass the per-player gate, so saving/restoring real
-// player speeds around the super call is the only complete fix. Keeping the
-// per-player gate ensures the per-player virtual is still blocked for the
-// real player (so visual side effects on the real player don't fire).
+// activations route through. The engine's binary impl of the LAYER's
+// updateTimeMod writes m_playerSpeed (and m_playerSpeedAC) inline on
+// m_player1/m_player2 (the real players) BEFORE delegating to the per-player
+// virtual. Those inline writes bypass the per-player TrajPlayerObjectHook
+// gate, and m_simP1/m_simP2 (the sim players) are separate PlayerObjects
+// that super never touches — so a naive save/restore around super reverts
+// real's speed correctly but leaves sim's speed unchanged at the OLD value,
+// meaning sim's predicted trajectories ignore speed-mod portals entirely.
+//
+// The correct dance: snapshot real → super → read the new speed from real
+// (super wrote it there) → propagate that new speed to the corresponding
+// sim player (m_simP1 mirrors m_player1, m_simP2 mirrors m_player2) →
+// restore real. After this, real is unchanged, and the sim players that
+// will simulate forward from this portal have the new speed in their
+// physics state.
 class $modify(TrajLayerSpeedHook, GJBaseGameLayer) {
     void updateTimeMod(float speed, bool players, bool noEffects) {
         auto& s = sim();
-        if (s.isSimulating()) {
-            auto* pl = s.playLayer();
-            float ps1 = (pl && pl->m_player1) ? pl->m_player1->m_playerSpeed   : 0.f;
-            float ac1 = (pl && pl->m_player1) ? pl->m_player1->m_playerSpeedAC : 0.f;
-            float ps2 = (pl && pl->m_player2) ? pl->m_player2->m_playerSpeed   : 0.f;
-            float ac2 = (pl && pl->m_player2) ? pl->m_player2->m_playerSpeedAC : 0.f;
+        if (!s.isSimulating()) {
             GJBaseGameLayer::updateTimeMod(speed, players, noEffects);
-            if (pl && pl->m_player1) {
-                pl->m_player1->m_playerSpeed   = ps1;
-                pl->m_player1->m_playerSpeedAC = ac1;
-            }
-            if (pl && pl->m_player2) {
-                pl->m_player2->m_playerSpeed   = ps2;
-                pl->m_player2->m_playerSpeedAC = ac2;
-            }
             return;
         }
+        auto* pl = s.playLayer();
+        auto* r1 = (pl && pl->m_player1) ? pl->m_player1 : nullptr;
+        auto* r2 = (pl && pl->m_player2) ? pl->m_player2 : nullptr;
+        float prevPs1 = r1 ? r1->m_playerSpeed   : 0.f;
+        float prevAc1 = r1 ? r1->m_playerSpeedAC : 0.f;
+        float prevPs2 = r2 ? r2->m_playerSpeed   : 0.f;
+        float prevAc2 = r2 ? r2->m_playerSpeedAC : 0.f;
+
         GJBaseGameLayer::updateTimeMod(speed, players, noEffects);
+
+        // Super wrote the new speed onto the real players. Propagate to sim
+        // so sim's physics uses the post-portal speed for the rest of the
+        // runPlan.
+        auto applyToSim = [](PlayerObject* sim, PlayerObject* fromReal) {
+            if (!sim || !fromReal) return;
+            sim->m_playerSpeed   = fromReal->m_playerSpeed;
+            sim->m_playerSpeedAC = fromReal->m_playerSpeedAC;
+        };
+        applyToSim(s.simP1(), r1);
+        applyToSim(s.simP2(), r2);
+
+        // Restore real player speeds — last so the propagation above reads
+        // the engine-set (post-super) values, not the restored ones.
+        if (r1) { r1->m_playerSpeed = prevPs1; r1->m_playerSpeedAC = prevAc1; }
+        if (r2) { r2->m_playerSpeed = prevPs2; r2->m_playerSpeedAC = prevAc2; }
     }
 };
 
@@ -539,7 +557,16 @@ class $modify(TrajEnhancedHook, EnhancedGameObject) {
     void activatedByPlayer(PlayerObject* player) {
         auto& s = sim();
         if (s.isSimPlayer(player)) {
-            s.markActivated(this);
+            // Spoof engine flags (m_activated + m_activatedByPlayer1/2) via
+            // markActivated, then skip super so visual / audio side effects
+            // don't fire for sim. The flags are restored to pre-sim values at
+            // runPlan/runBranch end via clearActivated(). Without flag
+            // spoofing, the engine's playerTouchedRing super (which checks
+            // the flags directly in some code paths, not only through
+            // hasBeenActivatedByPlayer) would treat every orb as if it had
+            // never been activated, making the bot behave as if every orb
+            // were multi-activate.
+            s.markActivated(this, player);
             return;
         }
         EnhancedGameObject::activatedByPlayer(player);

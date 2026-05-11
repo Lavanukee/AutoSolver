@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Geode/Geode.hpp>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -62,6 +63,8 @@ public:
 
     bool isSimulating() const { return m_simulating; }
     bool isSimPlayer(PlayerObject* p) const { return p && (p == m_simP1 || p == m_simP2); }
+    PlayerObject* simP1() const { return m_simP1; }
+    PlayerObject* simP2() const { return m_simP2; }
     bool markSimDeadIfSimPlayer(PlayerObject* p);
     bool isSimDead(PlayerObject* p) const;
     void clearSimDead(PlayerObject* p);
@@ -69,13 +72,26 @@ public:
     void setFrameDelta(float dt);
     PlayLayer* playLayer() const { return m_pl; }
 
-    // Sim-side activation tracking. activatedByPlayer is no-op'd for sim
-    // (so the engine's per-object flags stay clean for the real player), which
-    // means hasBeenActivatedByPlayer would otherwise return false forever and
-    // the engine would re-fire orbs every iteration. We mirror activation in
-    // a sim-local set, cleared per branch.
-    void markActivated(EnhancedGameObject* obj);
+    // Sim-side activation tracking + engine-flag spoofing.
+    //
+    // Activation flow: when sim crosses an orb, the engine's playerTouchedRing
+    // super needs to think the orb hasn't been activated (so it fires the
+    // bounce), then mark it as activated (so subsequent overlaps within the
+    // same runPlan don't re-fire). The engine checks the orb's `m_activated`
+    // / `m_activatedByPlayer1/2` bool fields directly in some code paths
+    // (NOT only through the virtual `hasBeenActivatedByPlayer`), so our
+    // hook-and-skip approach in activatedByPlayer left those flags at false
+    // → engine treated EVERY orb as fresh on every overlap → the bot saw
+    // every orb as multi-activate.
+    //
+    // Fix: when sim activates an orb, we DO set the engine's bool flags
+    // (m_activated + m_activatedByPlayer1/2 for whichever sim player) so the
+    // engine's direct checks see the activation. We capture the pre-sim flag
+    // values into the map and restore them at runPlan boundary, so the real
+    // player's view of the orb's activation state is unchanged.
+    void markActivated(EnhancedGameObject* obj, PlayerObject* simWho);
     bool hasBeenActivated(EnhancedGameObject* obj) const;
+    void clearActivated();  // restore engine flags + empty the map
 
     // Sim-local "destroyed" tracking. The engine's destroyObject mutates the
     // real level (removes from active arrays, hides the sprite, fires spawn
@@ -172,8 +188,16 @@ private:
     bool  m_player2Pressed{false};
     float m_frameDt{1.f / 240.f};
 
-    std::unordered_set<EnhancedGameObject*> m_activated;
-    std::unordered_set<GameObject*>         m_simDestroyed;
+    // Pre-sim activation flag snapshot per orb sim has touched this runPlan.
+    // Restored to the orb's fields at clearActivated() time so real player's
+    // view of orb activation state is unchanged.
+    struct OrbPreSimFlags {
+        bool activated;
+        bool activatedByPlayer1;
+        bool activatedByPlayer2;
+    };
+    std::unordered_map<EnhancedGameObject*, OrbPreSimFlags> m_activated;
+    std::unordered_set<GameObject*>                         m_simDestroyed;
 
     // Rate-limit budget for [orb-far-activate] log. Decremented on each
     // qualifying event (sim activates an orb >30 units away); when ≤0 we

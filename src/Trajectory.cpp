@@ -85,6 +85,18 @@ struct LayerStateSnapshot {
     bool             hadMiddleground{false};
     float            middleGroundOffsetY{0.f};
 
+    // GJGameState's per-tick time-mod cache. Sits AFTER several non-POD
+    // container members (m_spawnChannelRelated0/1, m_tweenActions,
+    // m_gameObjectPhysics, m_unkVecFloat1), so the POD-prefix memcpy below
+    // can't reach them — they need explicit capture. The engine reads
+    // m_timeModRelated each tick (per GJBaseGameLayer::update +0xe8 per the
+    // 1.0.2 commit message) and writes the cached speed to BOTH real players;
+    // without restoring this, sim crossing a speed-mod portal permanently
+    // shifts real-game speed at the next engine tick, before the real
+    // player has crossed the portal.
+    float            timeModRelated{0.f};
+    bool             timeModRelated2{false};
+
     // POD prefix of GJGameState. The struct starts with ~30 m_unkPoint fields,
     // many m_unkFloat/m_unkInt/m_unkBool fields, and named fields like
     // m_cameraZoom/m_portalY/m_levelFlipping — all POD up to m_spawnChannelRelated0
@@ -145,6 +157,8 @@ struct LayerStateSnapshot {
         if (hadGroundLayer2) groundLayer2Pos = pl->m_groundLayer2->getPosition();
         if (hadMiddleground) middlegroundPos = pl->m_middleground->getPosition();
         middleGroundOffsetY = gs.m_middleGroundOffsetY;
+        timeModRelated      = gs.m_timeModRelated;
+        timeModRelated2     = gs.m_timeModRelated2;
         std::memcpy(gameStatePodPrefix, &gs, kGameStatePodSize);
     }
     void restore() {
@@ -201,6 +215,8 @@ struct LayerStateSnapshot {
             pl->m_middleground->setPosition(middlegroundPos);
         }
         gs.m_middleGroundOffsetY = middleGroundOffsetY;
+        gs.m_timeModRelated      = timeModRelated;
+        gs.m_timeModRelated2     = timeModRelated2;
         // Brute-force POD-prefix restore. Comes LAST so it overrides every
         // per-field write above with the snapshot bytes — meaning any field
         // we missed in the explicit per-field captures gets bit-for-bit
@@ -369,34 +385,63 @@ void TrajectorySimulator::clearSimDead(PlayerObject* p) {
     else if (p == m_simP2) m_simP2Dead = false;
 }
 
-void TrajectorySimulator::markActivated(EnhancedGameObject* obj) {
+void TrajectorySimulator::markActivated(EnhancedGameObject* obj, PlayerObject* simWho) {
     if (!obj) return;
-    // Diagnostic for orb false-hit (E4): when a sim activates an orb that's
-    // visually far from its position, this trace pinpoints the culprit.
-    // Bounded by m_activated dedup per branch + a global rate-limit so
-    // candidate × frame × orb fan-out can't drown the log.
-    if (m_simulating && m_activated.find(obj) == m_activated.end()) {
-        auto* sim = m_simP1 ? m_simP1 : m_simP2;
-        if (sim) {
-            auto const sp = sim->getPosition();
-            auto const op = obj->getPosition();
-            float const dx = sp.x - op.x;
-            float const dy = sp.y - op.y;
-            float const dist = std::sqrt(dx * dx + dy * dy);
-            if (dist > 30.f && --m_orbFarLogBudget <= 0) {
-                m_orbFarLogBudget = 60;  // ≤1 line / ~1s at 60Hz search cadence
-                geode::log::warn(
-                    "[orb-far-activate] objType={} simPos=({:.1f},{:.1f}) "
-                    "objPos=({:.1f},{:.1f}) dist={:.1f}",
-                    static_cast<int>(obj->m_objectType), sp.x, sp.y, op.x, op.y, dist);
+    bool const firstSimActivation = (m_activated.find(obj) == m_activated.end());
+    if (firstSimActivation) {
+        // Capture pre-sim activation flags so we can restore them at
+        // clearActivated() time. Real player's view of orb activation state
+        // must be unchanged after sim ends.
+        OrbPreSimFlags const snap {
+            obj->m_activated,
+            obj->m_activatedByPlayer1,
+            obj->m_activatedByPlayer2,
+        };
+        m_activated.emplace(obj, snap);
+
+        if (m_simulating) {
+            // Diagnostic for orb false-hit: when a sim activates an orb that's
+            // visually far from its position, this trace pinpoints the culprit.
+            // Bounded by per-branch dedup (we're inside `firstSimActivation`)
+            // plus a rate-limit budget so candidate × frame × orb fan-out from
+            // a level full of false-hits can't drown the log.
+            auto* simPos = simWho ? simWho : (m_simP1 ? m_simP1 : m_simP2);
+            if (simPos) {
+                auto const sp = simPos->getPosition();
+                auto const op = obj->getPosition();
+                float const dx = sp.x - op.x;
+                float const dy = sp.y - op.y;
+                float const dist = std::sqrt(dx * dx + dy * dy);
+                if (dist > 30.f && --m_orbFarLogBudget <= 0) {
+                    m_orbFarLogBudget = 60;
+                    geode::log::warn(
+                        "[orb-far-activate] objType={} simPos=({:.1f},{:.1f}) "
+                        "objPos=({:.1f},{:.1f}) dist={:.1f}",
+                        static_cast<int>(obj->m_objectType), sp.x, sp.y, op.x, op.y, dist);
+                }
             }
         }
     }
-    m_activated.insert(obj);
+    // Mark engine flags so the engine's playerTouchedRing super (and any
+    // other direct-flag check) sees the orb as activated for this sim
+    // player. We restore these to pre-sim values in clearActivated().
+    obj->m_activated = true;
+    if (simWho == m_simP1) obj->m_activatedByPlayer1 = true;
+    if (simWho == m_simP2) obj->m_activatedByPlayer2 = true;
 }
 
 bool TrajectorySimulator::hasBeenActivated(EnhancedGameObject* obj) const {
     return obj && m_activated.find(obj) != m_activated.end();
+}
+
+void TrajectorySimulator::clearActivated() {
+    for (auto const& [obj, snap] : m_activated) {
+        if (!obj) continue;
+        obj->m_activated          = snap.activated;
+        obj->m_activatedByPlayer1 = snap.activatedByPlayer1;
+        obj->m_activatedByPlayer2 = snap.activatedByPlayer2;
+    }
+    m_activated.clear();
 }
 
 void TrajectorySimulator::markSimDestroyed(GameObject* obj) {
@@ -540,7 +585,7 @@ void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
     // CCNode position can't drift from the {0,105} createSimPlayer default.
     sim->setPosition(base->getPosition());
     clearSimRingState(sim);
-    m_activated.clear();
+    clearActivated();
     clearSimDestroyed();
     clearSimDead(sim);
 
@@ -570,6 +615,7 @@ void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
     }
 
     snap.restore();
+    clearActivated();  // revert orb activation flags before next real engine tick
     drawHitboxAtEnd(sim, holdAtStart);
 }
 
@@ -624,7 +670,7 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
     };
     initSim(simA, base1);
     if (simB) initSim(simB, base2);
-    m_activated.clear();
+    clearActivated();
     clearSimDestroyed();
 
     // Snapshot per-runPlan: bot scoring calls runPlan many times per visual
@@ -717,6 +763,7 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
 
     m_simulating = false;
     snap.restore();
+    clearActivated();  // revert orb activation flags before next real engine tick
     return result;
 }
 
