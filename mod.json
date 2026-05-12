@@ -8,7 +8,7 @@
 	},
 	"id": "jedd.trajectory",
 	"name": "Autosolver",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"developer": "Jedd",
 	"description": "Geometry Dash full featured trajectory mod",
 	"settings": {
