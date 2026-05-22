@@ -1,0 +1,872 @@
+#include "Trajectory.hpp"
+
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <optional>
+
+using namespace geode::prelude;
+
+namespace traj {
+
+namespace {
+
+// Captures the slice of GJGameState that triggers / portal handlers / camera
+// commands mutate during a sim run, then writes it back at scope exit. Without
+// this, two classes of bug bite us:
+//
+//  1. Real-game leakage. A sim crossing a mode-switch portal flips
+//     m_isDualMode globally; a sim crossing a camera-zoom trigger moves the
+//     real camera; a sim hitting a flip portal toggles m_levelFlipping. The
+//     real player sees gameplay area changes it never crossed.
+//
+//  2. Trajectory divergence. The bot scores many candidates per visual frame
+//     via runPlan; later candidates start from layer state already mutated by
+//     earlier ones, so their predictions don't match what a fresh real frame
+//     would do. Symptom: orange line shows survival, ground truth shows death.
+//
+// Snapshot scope is per-runBranch and per-runPlan: each is a cohesive sim run
+// where mutations should persist DURING (so a portal crossed at frame 10
+// affects frame 11+ of THAT run), but be wiped between runs. m_gameState
+// holds nearly all the layer-wide gameplay/camera state we care about; we
+// snapshot the trivially-copyable POD subset (skipping containers like
+// m_tweenActions which are non-trivial to deep-copy and which trigger gating
+// in TrajEffectHook already prevents from being touched during sim).
+struct LayerStateSnapshot {
+    PlayLayer* pl{nullptr};
+
+    float            cameraZoom, targetCameraZoom;
+    cocos2d::CCPoint cameraOffset;
+    cocos2d::CCPoint cameraPosition, cameraPosition2;
+    float            cameraAngle, targetCameraAngle;
+    int              cameraEdge0, cameraEdge1, cameraEdge2, cameraEdge3;
+    bool             cameraShakeEnabled;
+    float            cameraShakeFactor;
+    cocos2d::CCPoint cameraStepDiff;
+
+    bool             isDualMode;
+    unsigned int     dualRelated;
+
+    float            levelFlipping;
+    bool             gravityRelated;
+    float            portalY;
+    GameObject*      lastActivatedPortal1;
+    GameObject*      lastActivatedPortal2;
+
+    float            timeWarp, queuedTimeWarp, timeWarpRelated;
+    int              currentChannel, rotateChannel;
+
+    // m_speedObjects is a CCArray that the engine appends to via
+    // addToSpeedObjects when ANY player (sim or real) crosses a speed-mod
+    // portal. Once an entry is in this array, the engine consults it on
+    // every subsequent tick to compute player speed — meaning if a sim
+    // adds an entry, the real player picks up that speed change too.
+    // Snapshot the array's pointer-set so we can restore it cleanly.
+    // Pointers only — items are owned elsewhere; we're not refcounting.
+    std::vector<cocos2d::CCObject*> speedObjects;
+
+    // m_groundLayer / m_groundLayer2 are the visible ground/ceiling bars.
+    // Mode-portal handlers update their positions synchronously AND start
+    // CCAction tweens for the visible slide-in. Sim's ball-mode physics reads
+    // these positions for ground/ceiling resolve (this is the regression
+    // vector for the ball-portal vertical-line bug — suppressing animate*Ground
+    // wholesale leaves sim's ball physics with stale ground refs).
+    //
+    // Solution: let the animate*Ground calls run unconditionally for sim, so
+    // sim gets the correct ground refs DURING runPlan; at runPlan boundary,
+    // restore the node positions to pre-sim values AND stopAllActions on
+    // them to cancel the visible tweens. Real game sees no leak because the
+    // CCActions never get a chance to step within the synchronous runPlan,
+    // and we strip them before yielding back to the engine's update loop.
+    cocos2d::CCPoint groundLayerPos;
+    cocos2d::CCPoint groundLayer2Pos;
+    cocos2d::CCPoint middlegroundPos;
+    bool             hadGroundLayer{false};
+    bool             hadGroundLayer2{false};
+    bool             hadMiddleground{false};
+    float            middleGroundOffsetY{0.f};
+
+    // GJGameState's per-tick time-mod cache. Sits AFTER several non-POD
+    // container members (m_spawnChannelRelated0/1, m_tweenActions,
+    // m_gameObjectPhysics, m_unkVecFloat1), so the POD-prefix memcpy below
+    // can't reach them — they need explicit capture. The engine reads
+    // m_timeModRelated each tick (per GJBaseGameLayer::update +0xe8 per the
+    // 1.0.2 commit message) and writes the cached speed to BOTH real players;
+    // without restoring this, sim crossing a speed-mod portal permanently
+    // shifts real-game speed at the next engine tick, before the real
+    // player has crossed the portal.
+    float            timeModRelated{0.f};
+    bool             timeModRelated2{false};
+
+    // Post-POD scalars (live after m_spawnChannelRelated0 in GJGameState, so
+    // the prefix memcpy below cannot reach them). Per the 2026-05 exhaustive
+    // bindings audit (docs/sim-reference/04-gjgamestate.md) these six scalars
+    // are advanced by the engine every tick: m_totalTime / m_levelTime are
+    // play-time accumulators; m_commandIndex and m_currentProgress are
+    // cursors into the level command queue and progress counter; m_unkUint3
+    // sits between them and is float-typed (likely a time-mod factor);
+    // m_unkUint64_1 is a second double, suspected per-tick counter. If sim's
+    // runPlan advances any of these, the real game's next tick reads the
+    // sim-advanced value — a strong suspect for the bookmarked speed-portal
+    // sim-side regression.
+    double           totalTime{0.0};
+    double           levelTime{0.0};
+    unsigned int     commandIndex{0};
+    float            unkUint3{0.f};
+    unsigned int     currentProgress{0};
+    double           unkUint64_1{0.0};
+
+    // Effect-manager state snapshot. The engine's own checkpoint mechanism
+    // (used at respawn) serializes the full effect-manager into an
+    // EffectManagerState struct via GJEffectManager::saveToState, and restores
+    // via loadFromState. We piggy-back on it so non-speed triggers that fire
+    // during sim (color, pulse, alpha, opacity, toggle, spawn, count, item,
+    // collision, timer, touch, move/rotate/scale group commands) get fully
+    // rolled back at runPlan/runBranch boundaries instead of leaking into the
+    // real game. Only captured when triggers are enabled — when the toggle is
+    // off, our TrajEffectHook never lets non-speed triggers fire in the first
+    // place, so there's nothing to roll back and we skip the copy cost.
+    //
+    // std::optional because EffectManagerState contains many gd::vector /
+    // gd::unordered_map fields; default-constructing one per LayerStateSnapshot
+    // (incl. when we're NOT going to use it) would burn allocations on every
+    // sim tick. optional<>::emplace builds it only when needed.
+    std::optional<EffectManagerState> effectManagerState;
+
+    // POD prefix of GJGameState. The struct starts with ~30 m_unkPoint fields,
+    // many m_unkFloat/m_unkInt/m_unkBool fields, and named fields like
+    // m_cameraZoom/m_portalY/m_levelFlipping — all POD up to m_spawnChannelRelated0
+    // (the first non-POD member, a gd::unordered_map). Snapshotting the entire
+    // prefix as raw bytes captures every play-area / camera / portal-related
+    // POD field at once, without having to enumerate each unknown field.
+    //
+    // Used to plug the ball-portal "gameplay-area leak" — sim crossing a ball
+    // portal mutates some POD field on GJGameState that wasn't covered by the
+    // explicit per-field captures (ground bar positions, m_portalY,
+    // m_middleGroundOffsetY all fail to plug it). Brute-force capturing the
+    // whole POD prefix sidesteps the field-identification problem.
+    static constexpr size_t kGameStatePodSize =
+        offsetof(GJGameState, m_spawnChannelRelated0);
+    unsigned char gameStatePodPrefix[kGameStatePodSize]{};
+
+    void capture(PlayLayer* p, bool captureEffectManager) {
+        pl = p;
+        if (!pl) return;
+        if (captureEffectManager && pl->m_effectManager) {
+            effectManagerState.emplace();
+            pl->m_effectManager->saveToState(*effectManagerState);
+        }
+        auto& gs = pl->m_gameState;
+        cameraZoom            = gs.m_cameraZoom;
+        targetCameraZoom      = gs.m_targetCameraZoom;
+        cameraOffset          = gs.m_cameraOffset;
+        cameraPosition        = gs.m_cameraPosition;
+        cameraPosition2       = gs.m_cameraPosition2;
+        cameraAngle           = gs.m_cameraAngle;
+        targetCameraAngle     = gs.m_targetCameraAngle;
+        cameraEdge0           = gs.m_cameraEdgeValue0;
+        cameraEdge1           = gs.m_cameraEdgeValue1;
+        cameraEdge2           = gs.m_cameraEdgeValue2;
+        cameraEdge3           = gs.m_cameraEdgeValue3;
+        cameraShakeEnabled    = gs.m_cameraShakeEnabled;
+        cameraShakeFactor     = gs.m_cameraShakeFactor;
+        cameraStepDiff        = gs.m_cameraStepDiff;
+        isDualMode            = gs.m_isDualMode;
+        dualRelated           = gs.m_dualRelated;
+        levelFlipping         = gs.m_levelFlipping;
+        gravityRelated        = gs.m_gravityRelated;
+        portalY               = gs.m_portalY;
+        lastActivatedPortal1  = gs.m_lastActivatedPortal1;
+        lastActivatedPortal2  = gs.m_lastActivatedPortal2;
+        timeWarp              = gs.m_timeWarp;
+        queuedTimeWarp        = gs.m_queuedTimeWarp;
+        timeWarpRelated       = gs.m_timeWarpRelated;
+        currentChannel        = gs.m_currentChannel;
+        rotateChannel         = gs.m_rotateChannel;
+        speedObjects.clear();
+        if (auto* arr = pl->m_speedObjects) {
+            speedObjects.reserve(arr->count());
+            for (int i = 0; i < static_cast<int>(arr->count()); ++i) {
+                speedObjects.push_back(arr->objectAtIndex(i));
+            }
+        }
+        hadGroundLayer  = pl->m_groundLayer  != nullptr;
+        hadGroundLayer2 = pl->m_groundLayer2 != nullptr;
+        hadMiddleground = pl->m_middleground != nullptr;
+        if (hadGroundLayer)  groundLayerPos  = pl->m_groundLayer->getPosition();
+        if (hadGroundLayer2) groundLayer2Pos = pl->m_groundLayer2->getPosition();
+        if (hadMiddleground) middlegroundPos = pl->m_middleground->getPosition();
+        middleGroundOffsetY = gs.m_middleGroundOffsetY;
+        timeModRelated      = gs.m_timeModRelated;
+        timeModRelated2     = gs.m_timeModRelated2;
+        totalTime           = gs.m_totalTime;
+        levelTime           = gs.m_levelTime;
+        commandIndex        = gs.m_commandIndex;
+        unkUint3            = gs.m_unkUint3;
+        currentProgress    = gs.m_currentProgress;
+        unkUint64_1         = gs.m_unkUint64_1;
+        std::memcpy(gameStatePodPrefix, &gs, kGameStatePodSize);
+    }
+    void restore() {
+        if (!pl) return;
+        auto& gs = pl->m_gameState;
+        gs.m_cameraZoom           = cameraZoom;
+        gs.m_targetCameraZoom     = targetCameraZoom;
+        gs.m_cameraOffset         = cameraOffset;
+        gs.m_cameraPosition       = cameraPosition;
+        gs.m_cameraPosition2      = cameraPosition2;
+        gs.m_cameraAngle          = cameraAngle;
+        gs.m_targetCameraAngle    = targetCameraAngle;
+        gs.m_cameraEdgeValue0     = cameraEdge0;
+        gs.m_cameraEdgeValue1     = cameraEdge1;
+        gs.m_cameraEdgeValue2     = cameraEdge2;
+        gs.m_cameraEdgeValue3     = cameraEdge3;
+        gs.m_cameraShakeEnabled   = cameraShakeEnabled;
+        gs.m_cameraShakeFactor    = cameraShakeFactor;
+        gs.m_cameraStepDiff       = cameraStepDiff;
+        gs.m_isDualMode           = isDualMode;
+        gs.m_dualRelated          = dualRelated;
+        gs.m_levelFlipping        = levelFlipping;
+        gs.m_gravityRelated       = gravityRelated;
+        gs.m_portalY              = portalY;
+        gs.m_lastActivatedPortal1 = lastActivatedPortal1;
+        gs.m_lastActivatedPortal2 = lastActivatedPortal2;
+        gs.m_timeWarp             = timeWarp;
+        gs.m_queuedTimeWarp       = queuedTimeWarp;
+        gs.m_timeWarpRelated      = timeWarpRelated;
+        gs.m_currentChannel       = currentChannel;
+        gs.m_rotateChannel        = rotateChannel;
+        if (auto* arr = pl->m_speedObjects) {
+            arr->removeAllObjects();
+            for (auto* obj : speedObjects) {
+                if (obj) arr->addObject(obj);
+            }
+        }
+        // Cancel any ground-bar CCAction tweens started during sim, then
+        // restore the bar positions. Both halves are needed: stopping the
+        // actions alone leaves the bar at its post-sim position; restoring
+        // position alone lets the stopped-but-still-stepping action pull it
+        // back during the next engine tick. Also clears actions on the layer
+        // itself in case the engine attaches the gameplay-area tween there.
+        if (hadGroundLayer && pl->m_groundLayer) {
+            pl->m_groundLayer->stopAllActions();
+            pl->m_groundLayer->setPosition(groundLayerPos);
+        }
+        if (hadGroundLayer2 && pl->m_groundLayer2) {
+            pl->m_groundLayer2->stopAllActions();
+            pl->m_groundLayer2->setPosition(groundLayer2Pos);
+        }
+        if (hadMiddleground && pl->m_middleground) {
+            pl->m_middleground->stopAllActions();
+            pl->m_middleground->setPosition(middlegroundPos);
+        }
+        gs.m_middleGroundOffsetY = middleGroundOffsetY;
+        gs.m_timeModRelated      = timeModRelated;
+        gs.m_timeModRelated2     = timeModRelated2;
+        gs.m_totalTime           = totalTime;
+        gs.m_levelTime           = levelTime;
+        gs.m_commandIndex        = commandIndex;
+        gs.m_unkUint3            = unkUint3;
+        gs.m_currentProgress     = currentProgress;
+        gs.m_unkUint64_1         = unkUint64_1;
+        // Brute-force POD-prefix restore. Comes LAST so it overrides every
+        // per-field write above with the snapshot bytes — meaning any field
+        // we missed in the explicit per-field captures gets bit-for-bit
+        // restored. Safe because the prefix is pure POD; non-POD members
+        // (m_spawnChannelRelated0 onwards) are not touched.
+        std::memcpy(&gs, gameStatePodPrefix, kGameStatePodSize);
+        // Effect-manager restore. Comes AFTER the POD-prefix memcpy because
+        // loadFromState may also touch fields tracked by GJGameState (e.g.
+        // spawn-channel state lives in non-POD GJGameState members that the
+        // memcpy doesn't reach, but the effect manager reads its own copy of
+        // the relevant queues from its serialized state). When triggers were
+        // suppressed (effectManagerState empty), nothing to restore.
+        if (effectManagerState && pl->m_effectManager) {
+            pl->m_effectManager->loadFromState(*effectManagerState);
+        }
+    }
+};
+
+}  // namespace
+
+TrajectorySimulator& TrajectorySimulator::get() {
+    static TrajectorySimulator instance;
+    return instance;
+}
+
+PlayerObject* TrajectorySimulator::createSimPlayer(PlayLayer* pl) {
+    PlayerObject* p = PlayerObject::create(1, 1, pl, pl, true);
+    p->setPosition({0.f, 105.f});
+    p->setVisible(false);
+    p->setID("trajectory-sim-player"_spr);
+    pl->m_objectLayer->addChild(p);
+    return p;
+}
+
+void TrajectorySimulator::adoptOwnRings(PlayerObject* sim, cocos2d::CCArray*& slot) {
+    // Capture (or allocate) a private CCArray for the sim's m_touchingRings
+    // so it can NEVER share the real player's array after copyAttributes.
+    // We retain it so the sim PlayerObject's eventual destructor can release
+    // one ref while our own ref keeps the array alive between sims.
+    if (!sim) return;
+    if (sim->m_touchingRings) {
+        slot = sim->m_touchingRings;
+    } else {
+        slot = cocos2d::CCArray::create();
+        sim->m_touchingRings = slot;
+    }
+    slot->retain();
+}
+
+cocos2d::CCDrawNode* TrajectorySimulator::ensureDrawNode() {
+    if (m_drawNode || !m_pl) return m_drawNode;
+    m_drawNode = CCDrawNode::create();
+    m_drawNode->setID("trajectory-draw-node"_spr);
+    m_drawNode->retain();
+    auto* dbg = m_pl->m_debugDrawNode;
+    if (dbg && dbg->getParent()) {
+        dbg->getParent()->addChild(m_drawNode);
+        m_drawNode->setZOrder(dbg->getZOrder());
+    } else {
+        m_pl->addChild(m_drawNode);
+    }
+    m_drawNode->setVisible(m_show);
+    return m_drawNode;
+}
+
+void TrajectorySimulator::onPlayLayerInit(PlayLayer* pl) {
+    // Defensive cleanup: if PlayLayer::onQuit didn't fire on the previous
+    // level (Eclipse mod chain, scene transition shortcuts, crashes), our
+    // m_drawNode is orphaned-but-retained and ensureDrawNode would skip
+    // re-creation. Drop it explicitly so the new layer gets a fresh node.
+    // m_simP1/m_simP2 weren't retained by us — their old parent destroyed
+    // them, so we just null and recreate.
+    if (m_drawNode) {
+        m_drawNode->removeFromParent();
+        m_drawNode->release();
+        m_drawNode = nullptr;
+    }
+    // Defensive: if the previous level's onQuit didn't fire (Eclipse / scene
+    // shortcuts / crashes), our retained rings refs are still held. The old
+    // sim PlayerObjects were freed by their parent, so the array is already
+    // down to refcount 1 (our ref) — release to free, then re-allocate per sim.
+    if (m_simP1OwnRings) { m_simP1OwnRings->release(); m_simP1OwnRings = nullptr; }
+    if (m_simP2OwnRings) { m_simP2OwnRings->release(); m_simP2OwnRings = nullptr; }
+    m_simP1 = nullptr;
+    m_simP2 = nullptr;
+
+    m_pl = pl;
+    m_simP1 = createSimPlayer(pl);
+    adoptOwnRings(m_simP1, m_simP1OwnRings);
+    m_simP2 = createSimPlayer(pl);
+    adoptOwnRings(m_simP2, m_simP2OwnRings);
+    ensureDrawNode();
+    m_player1Pressed = false;
+    m_player2Pressed = false;
+    m_simulating = false;
+    m_inSimulate = false;
+    m_levelReady = false;
+    m_simP1Dead = false;
+    m_simP2Dead = false;
+    m_activated.clear();
+}
+
+void TrajectorySimulator::onPlayLayerReset() {
+    if (m_drawNode) m_drawNode->clear();
+    m_player1Pressed = false;
+    m_player2Pressed = false;
+    m_simulating = false;
+    m_inSimulate = false;
+    m_simP1Dead = false;
+    m_simP2Dead = false;
+}
+
+void TrajectorySimulator::onPlayLayerQuit() {
+    if (m_drawNode) {
+        m_drawNode->removeFromParent();
+        m_drawNode->release();
+        m_drawNode = nullptr;
+    }
+    if (m_simP1OwnRings) { m_simP1OwnRings->release(); m_simP1OwnRings = nullptr; }
+    if (m_simP2OwnRings) { m_simP2OwnRings->release(); m_simP2OwnRings = nullptr; }
+    m_simP1 = nullptr;
+    m_simP2 = nullptr;
+    m_pl = nullptr;
+    m_simulating = false;
+    m_inSimulate = false;
+    m_levelReady = false;
+    m_simP1Dead = false;
+    m_simP2Dead = false;
+}
+
+void TrajectorySimulator::setShowTrajectory(bool v) {
+    m_show = v;
+    if (m_drawNode) {
+        if (!v) m_drawNode->clear();
+        m_drawNode->setVisible(v);
+    }
+}
+
+void TrajectorySimulator::setIterations(int v) {
+    if (v < 1) v = 1;
+    if (v > 1000) v = 1000;
+    m_iterations = v;
+}
+
+void TrajectorySimulator::setPadsEnabled(bool v)     { m_pads     = v; }
+void TrajectorySimulator::setOrbsEnabled(bool v)     { m_orbs     = v; }
+void TrajectorySimulator::setPortalsEnabled(bool v)  { m_portals  = v; }
+void TrajectorySimulator::setTriggersEnabled(bool v) { m_triggers = v; }
+
+void TrajectorySimulator::recordRealButton(bool down, bool isP1) {
+    if (isP1) m_player1Pressed = down;
+    else      m_player2Pressed = down;
+}
+
+void TrajectorySimulator::setFrameDelta(float dt) {
+    if (!m_pl) return;
+    float warp = m_pl->m_gameState.m_timeWarp;
+    if (warp <= 0.f) warp = 1.f;
+    m_frameDt = dt / warp;
+}
+
+bool TrajectorySimulator::markSimDeadIfSimPlayer(PlayerObject* p) {
+    if (p == m_simP1) { m_simP1Dead = true; return true; }
+    if (p == m_simP2) { m_simP2Dead = true; return true; }
+    return false;
+}
+
+bool TrajectorySimulator::isSimDead(PlayerObject* p) const {
+    if (p == m_simP1) return m_simP1Dead;
+    if (p == m_simP2) return m_simP2Dead;
+    return false;
+}
+
+void TrajectorySimulator::clearSimDead(PlayerObject* p) {
+    if (p == m_simP1) m_simP1Dead = false;
+    else if (p == m_simP2) m_simP2Dead = false;
+}
+
+void TrajectorySimulator::markActivated(EnhancedGameObject* obj, PlayerObject* simWho) {
+    if (!obj) return;
+    bool const firstSimActivation = (m_activated.find(obj) == m_activated.end());
+    if (firstSimActivation) {
+        // Capture pre-sim activation flags so we can restore them at
+        // clearActivated() time. Real player's view of orb activation state
+        // must be unchanged after sim ends.
+        OrbPreSimFlags const snap {
+            obj->m_activated,
+            obj->m_activatedByPlayer1,
+            obj->m_activatedByPlayer2,
+        };
+        m_activated.emplace(obj, snap);
+
+        if (m_simulating) {
+            // Diagnostic for orb false-hit: when a sim activates an orb that's
+            // visually far from its position, this trace pinpoints the culprit.
+            // Bounded by per-branch dedup (we're inside `firstSimActivation`)
+            // plus a rate-limit budget so candidate × frame × orb fan-out from
+            // a level full of false-hits can't drown the log.
+            auto* simPos = simWho ? simWho : (m_simP1 ? m_simP1 : m_simP2);
+            if (simPos) {
+                auto const sp = simPos->getPosition();
+                auto const op = obj->getPosition();
+                float const dx = sp.x - op.x;
+                float const dy = sp.y - op.y;
+                float const dist = std::sqrt(dx * dx + dy * dy);
+                if (dist > 30.f && --m_orbFarLogBudget <= 0) {
+                    m_orbFarLogBudget = 60;
+                    geode::log::warn(
+                        "[orb-far-activate] objType={} simPos=({:.1f},{:.1f}) "
+                        "objPos=({:.1f},{:.1f}) dist={:.1f}",
+                        static_cast<int>(obj->m_objectType), sp.x, sp.y, op.x, op.y, dist);
+                }
+            }
+        }
+    }
+    // Mark engine flags so the engine's playerTouchedRing super (and any
+    // other direct-flag check) sees the orb as activated for this sim
+    // player. We restore these to pre-sim values in clearActivated().
+    obj->m_activated = true;
+    if (simWho == m_simP1) obj->m_activatedByPlayer1 = true;
+    if (simWho == m_simP2) obj->m_activatedByPlayer2 = true;
+}
+
+bool TrajectorySimulator::hasBeenActivated(EnhancedGameObject* obj) const {
+    return obj && m_activated.find(obj) != m_activated.end();
+}
+
+void TrajectorySimulator::clearActivated() {
+    for (auto const& [obj, snap] : m_activated) {
+        if (!obj) continue;
+        obj->m_activated          = snap.activated;
+        obj->m_activatedByPlayer1 = snap.activatedByPlayer1;
+        obj->m_activatedByPlayer2 = snap.activatedByPlayer2;
+    }
+    m_activated.clear();
+}
+
+void TrajectorySimulator::markSimDestroyed(GameObject* obj) {
+    if (obj) m_simDestroyed.insert(obj);
+}
+
+bool TrajectorySimulator::isSimDestroyed(GameObject* obj) const {
+    return obj && m_simDestroyed.find(obj) != m_simDestroyed.end();
+}
+
+void TrajectorySimulator::clearSimDestroyed() {
+    m_simDestroyed.clear();
+}
+
+void TrajectorySimulator::clearSimRingState(PlayerObject* sim) {
+    if (!sim) return;
+    sim->m_dashRing = nullptr;
+    // Full dash-state reset: nulling m_dashRing alone leaves m_isDashing/dash
+    // angle/origin from a prior branch. The engine renders the dash raycast
+    // line whenever m_isDashing is true regardless of m_dashRing, which made
+    // the sim show a permanent attached-line visual after activating any dash
+    // orb. copyAttributes is called before this, so we'll re-derive any state
+    // the real player still legitimately holds on the next branch.
+    sim->m_isDashing      = false;
+    sim->m_dashX          = 0.0;
+    sim->m_dashY          = 0.0;
+    sim->m_dashAngle      = 0.0;
+    sim->m_dashStartTime  = 0.0;
+
+    sim->m_padRingRelated = false;
+    sim->m_ringJumpRelated = false;
+    sim->m_ringRelatedSet.clear();
+    sim->m_stateRingJump = false;
+    sim->m_stateRingJump2 = false;
+    sim->m_touchedRing = false;
+    sim->m_touchedCustomRing = false;
+    // Restore the sim's PRIVATE m_touchingRings pointer. copyAttributes(base)
+    // (called immediately before this in initSim/runBranch) shallow-copies
+    // base's CCArray pointer onto the sim, so without this restore we'd share
+    // the real player's array — and removeAllObjects below would clobber the
+    // real player's view of which rings it's overlapping. With the restore,
+    // the sim only ever touches its own retained array.
+    auto* ownRings = (sim == m_simP1) ? m_simP1OwnRings
+                  : (sim == m_simP2) ? m_simP2OwnRings : nullptr;
+    if (ownRings) {
+        sim->m_touchingRings = ownRings;
+        ownRings->removeAllObjects();
+    } else if (sim->m_touchingRings) {
+        sim->m_touchingRings->removeAllObjects();
+    }
+    sim->m_touchedRings.clear();
+    sim->m_jumpPadRelated.clear();
+}
+
+void TrajectorySimulator::clearPerTickRingOverlap(PlayerObject* sim) {
+    if (!sim) return;
+    // Only the "currently overlapping this tick" state. checkCollisions will
+    // re-add via playerTouchedRing for orbs the sim is genuinely overlapping
+    // right now. m_touchedRing/m_touchedCustomRing are per-tick edge-detect
+    // bools the engine sets on first overlap; clearing them mirrors the
+    // engine's own tick-start clear and keeps the bot from seeing stale
+    // "touched a ring last tick" state when the sim has moved past.
+    sim->m_touchedRing       = false;
+    sim->m_touchedCustomRing = false;
+    if (sim->m_touchingRings) {
+        sim->m_touchingRings->removeAllObjects();
+    }
+}
+
+void TrajectorySimulator::simulate() {
+    if (!m_show || !m_pl || !m_simP1 || !m_simP2) return;
+    if (!m_levelReady) return;
+    if (m_inSimulate) return;
+    m_inSimulate = true;
+    struct ScopeReset { bool& f; ~ScopeReset() { f = false; } } _sr{ m_inSimulate };
+    auto* draw = ensureDrawNode();
+    if (!draw) return;
+    draw->clear();
+
+    m_simulating = true;
+    simulateForPlayer(m_simP1, m_simP2, m_pl->m_player1, /*isPlayer2=*/false);
+    if (m_pl->m_gameState.m_isDualMode && m_pl->m_player2) {
+        simulateForPlayer(m_simP2, m_simP1, m_pl->m_player2, /*isPlayer2=*/true);
+    }
+    m_simulating = false;
+}
+
+void TrajectorySimulator::simulateForPlayer(PlayerObject* a, PlayerObject* b,
+                                            PlayerObject* base, bool isP2) {
+    runBranch(a, base, /*holdAtStart=*/true,  isP2);
+    runBranch(b, base, /*holdAtStart=*/false, isP2);
+}
+
+void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
+                                    bool holdAtStart, bool /*isP2*/) {
+    if (!sim || !base || !m_pl) return;
+
+    sim->setVisible(false);
+    sim->copyAttributes(base);
+    sim->m_gravityMod = base->m_gravityMod;
+    sim->m_isOnGround = base->m_isOnGround;
+    // Wave-on-ground Y-offset hunt: pinning down which fields copyAttributes
+    // is dropping. See docs/issue-wave-ground-y-offset.md. Fields grouped by
+    // role:
+    //   - sliding/slope state (engine consults during ground-contact resolve)
+    //   - surface-material / categorized ground state
+    //   - collision/landing pointers (ground reference object, side-collide)
+    //   - jump-buffer/landing/slope booleans (round-2 fix from earlier)
+    //   - vehicle hitbox size (last because it'd visibly disrupt cube too if
+    //     it was the issue, and cube is precise — but harmless to copy)
+    sim->m_isSliding                     = base->m_isSliding;
+    sim->m_maybeSlopeForce               = base->m_maybeSlopeForce;
+    sim->m_slopeAngle                    = base->m_slopeAngle;
+    sim->m_slopeSlidingMaybeRotated      = base->m_slopeSlidingMaybeRotated;
+    sim->m_isOnIce                       = base->m_isOnIce;
+    sim->m_maybeGoingCorrectSlopeDirection = base->m_maybeGoingCorrectSlopeDirection;
+    sim->m_maybeUpsideDownSlope          = base->m_maybeUpsideDownSlope;
+    sim->m_groundObjectMaterial          = base->m_groundObjectMaterial;
+    sim->m_stateOnGround                 = base->m_stateOnGround;
+    sim->m_lastGroundObject              = base->m_lastGroundObject;
+    sim->m_preLastGroundObject           = base->m_preLastGroundObject;
+    sim->m_currentSlope                  = base->m_currentSlope;
+    sim->m_currentSlope2                 = base->m_currentSlope2;
+    sim->m_collidedObject                = base->m_collidedObject;
+    sim->m_collidingWithLeft             = base->m_collidingWithLeft;
+    sim->m_collidingWithRight            = base->m_collidingWithRight;
+    sim->m_jumpBuffered                  = base->m_jumpBuffered;
+    sim->m_wasJumpBuffered               = base->m_wasJumpBuffered;
+    sim->m_stateJumpBuffered             = base->m_stateJumpBuffered;
+    sim->m_isOnGround2                   = base->m_isOnGround2;
+    sim->m_isOnGround3                   = base->m_isOnGround3;
+    sim->m_isOnGround4                   = base->m_isOnGround4;
+    sim->m_lastLandTime                  = base->m_lastLandTime;
+    sim->m_lastGroundedPos               = base->m_lastGroundedPos;
+    sim->m_isOnSlope                     = base->m_isOnSlope;
+    sim->m_wasOnSlope                    = base->m_wasOnSlope;
+    sim->m_slopeVelocity                 = base->m_slopeVelocity;
+    sim->m_vehicleSize                   = base->m_vehicleSize;
+    // Explicit position re-sync. copyAttributes likely already covers CCNode
+    // position (cube-sim alignment was perfect post-round-1), but this is a
+    // belt-and-suspenders no-op for cube while guaranteeing wave-mode's
+    // CCNode position can't drift from the {0,105} createSimPlayer default.
+    sim->setPosition(base->getPosition());
+    clearSimRingState(sim);
+    clearActivated();
+    clearSimDestroyed();
+    clearSimDead(sim);
+
+    if (holdAtStart) sim->pushButton(PlayerButton::Jump);
+    else             sim->releaseButton(PlayerButton::Jump);
+
+    auto color = holdAtStart ? ccc4f(0.f, 1.f, 0.1f, 1.f)
+                             : ccc4f(1.f, 0.f, 0.1f, 1.f);
+    auto* draw = m_drawNode;
+
+    // Snapshot layer state per-branch: hold-branch and release-branch must
+    // both start from the SAME real-game state. Without restore between them,
+    // mutations made during the hold sim (camera zoom, dual mode, level flip,
+    // portal markers) carry into the release sim and skew its prediction.
+    LayerStateSnapshot snap; snap.capture(m_pl, m_triggers);
+
+    for (int i = 0; i < m_iterations; ++i) {
+        cocos2d::CCPoint prev = sim->getPosition();
+        // Advance the effect manager so trigger commands queued by sim
+        // crossings (move/toggle/spawn/pulse/color/etc.) actually progress
+        // their state per sim tick — without this, triggers fire on sim
+        // crossings but the resulting commands sit in the queue and never
+        // apply, so sim physics sees the level unchanged across the
+        // crossing. Engine itself calls updateEffects at 240Hz; matching
+        // that cadence keeps sim physics consistent with reality. Gated
+        // on m_triggers to skip the cost when the user opts out.
+        if (m_triggers && m_pl->m_effectManager) {
+            m_pl->m_effectManager->updateEffects(m_frameDt);
+        }
+        sim->resetCollisionLog(true);
+        clearPerTickRingOverlap(sim);
+        m_pl->checkCollisions(sim, m_frameDt, false);
+        if (isSimDead(sim)) break;
+
+        sim->update(m_frameDt);
+
+        draw->drawSegment(prev, sim->getPosition(), 0.65f, color);
+    }
+
+    snap.restore();
+    clearActivated();  // revert orb activation flags before next real engine tick
+    drawHitboxAtEnd(sim, holdAtStart);
+}
+
+PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2,
+                                        std::vector<bool> const& plan,
+                                        std::vector<bool> const& plan2) {
+    PlanResult result;
+    if (!base1 || !m_pl || !m_simP1 || plan.empty()) return result;
+
+    auto* simA = m_simP1;
+    auto* simB = (base2 && m_simP2) ? m_simP2 : nullptr;
+
+    auto initSim = [this](PlayerObject* sim, PlayerObject* base) {
+        sim->setVisible(false);
+        sim->copyAttributes(base);
+        sim->m_gravityMod = base->m_gravityMod;
+        sim->m_isOnGround = base->m_isOnGround;
+        // Same wave-suspect explicit-copy block as runBranch — see
+        // docs/issue-wave-ground-y-offset.md. Both code paths must seed the
+        // sim from base identically, otherwise runPlan's prediction drifts
+        // from runBranch's visual at frame 0.
+        sim->m_isSliding                       = base->m_isSliding;
+        sim->m_maybeSlopeForce                 = base->m_maybeSlopeForce;
+        sim->m_slopeAngle                      = base->m_slopeAngle;
+        sim->m_slopeSlidingMaybeRotated        = base->m_slopeSlidingMaybeRotated;
+        sim->m_isOnIce                         = base->m_isOnIce;
+        sim->m_maybeGoingCorrectSlopeDirection = base->m_maybeGoingCorrectSlopeDirection;
+        sim->m_maybeUpsideDownSlope            = base->m_maybeUpsideDownSlope;
+        sim->m_groundObjectMaterial            = base->m_groundObjectMaterial;
+        sim->m_stateOnGround                   = base->m_stateOnGround;
+        sim->m_lastGroundObject                = base->m_lastGroundObject;
+        sim->m_preLastGroundObject             = base->m_preLastGroundObject;
+        sim->m_currentSlope                    = base->m_currentSlope;
+        sim->m_currentSlope2                   = base->m_currentSlope2;
+        sim->m_collidedObject                  = base->m_collidedObject;
+        sim->m_collidingWithLeft               = base->m_collidingWithLeft;
+        sim->m_collidingWithRight              = base->m_collidingWithRight;
+        sim->m_jumpBuffered                    = base->m_jumpBuffered;
+        sim->m_wasJumpBuffered                 = base->m_wasJumpBuffered;
+        sim->m_stateJumpBuffered               = base->m_stateJumpBuffered;
+        sim->m_isOnGround2                     = base->m_isOnGround2;
+        sim->m_isOnGround3                     = base->m_isOnGround3;
+        sim->m_isOnGround4                     = base->m_isOnGround4;
+        sim->m_lastLandTime                    = base->m_lastLandTime;
+        sim->m_lastGroundedPos                 = base->m_lastGroundedPos;
+        sim->m_isOnSlope                       = base->m_isOnSlope;
+        sim->m_wasOnSlope                      = base->m_wasOnSlope;
+        sim->m_slopeVelocity                   = base->m_slopeVelocity;
+        sim->m_vehicleSize                     = base->m_vehicleSize;
+        sim->setPosition(base->getPosition());
+        clearSimRingState(sim);
+        clearSimDead(sim);
+    };
+    initSim(simA, base1);
+    if (simB) initSim(simB, base2);
+    clearActivated();
+    clearSimDestroyed();
+
+    // Snapshot per-runPlan: bot scoring calls runPlan many times per visual
+    // frame to grade candidates; without restore, candidate N starts from
+    // layer state already mutated by candidates 0..N-1 — that's the root
+    // cause of the "orange line predicts survival, ground truth dies"
+    // divergence. Mutations during this single plan's execution still
+    // persist (a portal crossed mid-plan affects the rest of the plan).
+    LayerStateSnapshot snap; snap.capture(m_pl, m_triggers);
+
+    m_simulating = true;
+
+    result.positions.reserve(plan.size() + 1);
+    result.positions.push_back(simA->getPosition());
+    result.yVels.reserve(plan.size() + 1);
+    result.yVels.push_back(simA->m_yVelocity);
+    if (simB) {
+        result.positions2.reserve(plan.size() + 1);
+        result.positions2.push_back(simB->getPosition());
+        result.yVels2.reserve(plan.size() + 1);
+        result.yVels2.push_back(simB->m_yVelocity);
+    }
+
+    // Independent P2 plan only meaningful when simB exists; otherwise P2
+    // mirrors P1 (or doesn't exist at all).
+    bool const useIndependentP2 = simB && !plan2.empty();
+
+    bool prevA = false;
+    bool prevB = false;
+    bool firstA = true;
+    bool firstB = true;
+    for (size_t i = 0; i < plan.size(); ++i) {
+        bool const wantA = plan[i];
+        // P2 input: own plan if 2P-mode (clamp to plan2 length, then hold last
+        // value); else mirror P1.
+        bool wantB;
+        if (useIndependentP2) {
+            wantB = plan2[std::min(i, plan2.size() - 1)];
+        } else {
+            wantB = wantA;
+        }
+
+        // Advance the effect manager per sim tick when triggers are enabled.
+        // See the matching block in runBranch above for the rationale: without
+        // this, trigger commands queued by sim crossings (move/toggle/spawn/
+        // pulse/color) sit in the manager's queue and never apply, so sim
+        // physics sees an unchanging level across a crossing. The engine
+        // calls updateEffects at 240Hz natively; we match that cadence inside
+        // sim. The EffectManagerState snapshot in LayerStateSnapshot above
+        // catches the mutated manager state and rolls it back at runPlan
+        // exit, so this work doesn't leak into the real game.
+        if (m_triggers && m_pl->m_effectManager) {
+            m_pl->m_effectManager->updateEffects(m_frameDt);
+        }
+        // checkCollisions BEFORE the button flip — mirrors the bot's reality
+        // path, where BotPlayerObjectHook::update pushes the button PRE-super
+        // (after the engine's per-tick checkCollisions has already run with
+        // the OLD button state). If we flipped the button before checkCollisions
+        // here, sim's checkCollisions would see a held button on the ground-
+        // touch tick and set m_jumpBuffered, giving a buffered jump impulse on
+        // the next update(); reality misses that because the button isn't held
+        // when its checkCollisions runs. Result was sim's post-jump yVel
+        // sitting +0.216 (= one gravity step) above reality's, accumulating
+        // +0.0486 of position drift per tick. Order-aligning the flip kills
+        // that signature.
+        simA->resetCollisionLog(true);
+        clearPerTickRingOverlap(simA);
+        m_pl->checkCollisions(simA, m_frameDt, false);
+        if (isSimDead(simA)) { result.died = true; break; }
+
+        if (simB) {
+            simB->resetCollisionLog(true);
+            clearPerTickRingOverlap(simB);
+            m_pl->checkCollisions(simB, m_frameDt, false);
+            if (isSimDead(simB)) { result.died = true; break; }
+        }
+
+        if (firstA || wantA != prevA) {
+            if (wantA) simA->pushButton(PlayerButton::Jump);
+            else       simA->releaseButton(PlayerButton::Jump);
+            prevA = wantA;
+            firstA = false;
+        }
+        if (simB && (firstB || wantB != prevB)) {
+            if (wantB) simB->pushButton(PlayerButton::Jump);
+            else       simB->releaseButton(PlayerButton::Jump);
+            prevB = wantB;
+            firstB = false;
+        }
+
+        simA->update(m_frameDt);
+        if (simB) simB->update(m_frameDt);
+
+        result.positions.push_back(simA->getPosition());
+        result.yVels.push_back(simA->m_yVelocity);
+        if (simB) {
+            result.positions2.push_back(simB->getPosition());
+            result.yVels2.push_back(simB->m_yVelocity);
+        }
+        ++result.framesSurvived;
+    }
+
+    m_simulating = false;
+    snap.restore();
+    clearActivated();  // revert orb activation flags before next real engine tick
+    return result;
+}
+
+void TrajectorySimulator::drawHitboxAtEnd(PlayerObject* sim, bool holdBranch) {
+    if (!sim || !m_drawNode) return;
+    auto rect = sim->getObjectRect();
+    cocos2d::CCPoint verts[4] = {
+        {rect.getMinX(), rect.getMinY()},
+        {rect.getMinX(), rect.getMaxY()},
+        {rect.getMaxX(), rect.getMaxY()},
+        {rect.getMaxX(), rect.getMinY()},
+    };
+    auto outline = holdBranch ? ccc4f(0.f, 1.f, 0.1f, 1.f)
+                              : ccc4f(1.f, 0.f, 0.1f, 1.f);
+    auto fill = ccc4f(0.f, 0.f, 0.f, 0.f);
+    m_drawNode->drawPolygon(verts, 4, fill, 0.25f, outline);
+}
+
+}

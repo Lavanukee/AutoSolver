@@ -1,0 +1,189 @@
+# Bindings Survey: A-F
+
+Total files in range: 170 (A--F, alphabetical first to last). Reviewed: 170.
+Range: `AccountHelpLayer.hpp` through `FriendsProfilePage.hpp`.
+Note: `binding/X.hpp` is a thin platform shim; real declarations live in `binding_arm/X.hpp` (or `binding_intel/X.hpp`). Line refs below are into `binding_arm/`.
+
+- `AccountHelpLayer.hpp` -- account UI menu, skip.
+- `AccountLayer.hpp` -- account UI menu, skip.
+- `AccountLoginLayer.hpp` -- account UI menu, skip.
+- `AccountRegisterLayer.hpp` -- account UI menu, skip.
+- `AchievementBar.hpp` -- UI overlay, skip.
+- `AchievementCell.hpp` -- UI cell, skip.
+- `AchievementManager.hpp` -- achievement system, skip (not in sim path).
+- `AchievementNotifier.hpp` -- UI overlay, skip.
+- `AchievementsLayer.hpp` -- UI menu, skip.
+- `AdToolbox.hpp` -- monetization, skip.
+- `AdvancedFollowEditObject.hpp` -- editor variant of follow trigger, derives `AdvancedFollowTriggerObject`. Has `m_modX/Y`, `m_redirectDirection`. Probably safe to ignore in sim (editor-only). `binding_arm/AdvancedFollowEditObject.hpp:67`.
+- `AdvancedFollowInstance.hpp` -- runtime follow-trigger instance: `m_gameObject`, `m_group`, `m_finished`, `m_doStart`, `m_started`, `m_processed`. **[INTEREST]** sim must replicate live follow-instances state; field at `binding_arm/AdvancedFollowInstance.hpp:33-43` is part of EffectManager runtime; if missed when copying state, follow-trigger objects could mis-trigger (relevant to D - trajectory divergence, F - any moving block alignment).
+- `AdvancedFollowTriggerObject.hpp` -- complex follow-physics trigger, derives `EffectGameObject`. Big body of force/steer/break/near/friction/easing fields. **[INTEREST]** dynamics-trigger that can move objects toward player; if your sim doesn't include this trigger's accumulated state it can desync object positions (D). Methods: `getAdvancedFollowID()` at `binding_arm/AdvancedFollowTriggerObject.hpp:61`; many `m_steerForce`, `m_acceleration`, `m_friction`, `m_followMode`, `m_startMode` fields at lines 71-135.
+- `AdvFollowSetup.hpp` -- aggregator: `m_centerIDs`, `m_groupIDs`, `m_controlIDs`, `m_delay`. **[INTEREST]** small aggregate of follow-trigger setup; relevant if duplicating EffectManager state for sim.
+- `AnimatedGameObject.hpp` -- multi-inheritance: `EnhancedGameObject` + `AnimatedSpriteDelegate` + `SpritePartDelegate`. Has `m_animatedSprite`, `m_childSprite`, `m_eyeSpritePart`, `m_finishedAnimating`, `m_playingAnimation`, `m_currentAnimation`, `m_notGrounded`, `m_animationID`. Methods: `playAnimation(int)` at `binding_arm/AnimatedGameObject.hpp:153`, `updateObjectAnimation()` at line 189. Mostly cosmetic; **[INTEREST-LOW]** `m_notGrounded` could affect ground detection if hooked but more likely just visual.
+- `AnimatedShopKeeper.hpp` -- shop NPC, skip (UI/cosmetic).
+- `AnimatedSpriteDelegate.hpp` -- pure-virtual delegate `animationFinished(char const*)`, skip (1-method protocol).
+- `AppDelegate.hpp` -- top-level app lifecycle. **[INTEREST]** `pauseGame()`, `pauseSound()`, `resumeSound()`, `applicationDidEnterBackground()`, `trySaveGame()`, `m_gamePaused`. May be relevant if sim wants to suppress sound (relates to portal-particle and audio side-effects); also `setIdleTimerDisabled` at `binding_arm/AppDelegate.hpp:177`.
+- `ArtistCell.hpp` -- music UI, skip.
+- `ArtTriggerGameObject.hpp` -- visual-art-style trigger, derives EffectGameObject. Single field `m_artIndex`. Cosmetic, low interest. `binding_arm/ArtTriggerGameObject.hpp:71`.
+- `AudioAssetsBrowser.hpp` -- audio UI, skip.
+- `AudioEffectsLayer.hpp` -- audio UI, skip.
+- `AudioLineGuideGameObject.hpp` -- audio guide-line trigger, fields `m_beatsPerMinute`, `m_beatsPerBar`, `m_speed`, `m_disabled`. Cosmetic. Low interest.
+- `BitmapFontCache.hpp` -- font cache, skip.
+- `BonusDropdown.hpp` -- UI overlay, skip.
+- `BoomListLayer.hpp` -- list UI, skip.
+- `BoomListView.hpp` -- list UI, skip.
+- `BoomScrollLayer.hpp` -- scroll UI, skip.
+- `BoomScrollLayerDelegate.hpp` -- scroll UI delegate, skip.
+- `BrowseSmartKeyLayer.hpp` -- editor browser UI, skip.
+- `BrowseSmartTemplateLayer.hpp` -- editor browser UI, skip.
+- `ButtonPage.hpp` -- editor button page UI, skip.
+- `ButtonSprite.hpp` -- generic button sprite UI utility, skip.
+- `CameraTriggerGameObject.hpp` -- camera trigger object derives `EffectGameObject`. Fields `m_exitStatic`, `m_followObject`, `m_followEasing`, `m_edgeDirection`, `m_smoothVelocity`, `m_velocityModifier`, `m_exitInstant`, `m_previewOpacity`. **[INTEREST: C]** core camera trigger -- relevant to "camera changes leaking from sim". `triggerObject(GJBaseGameLayer*, ...)` is virtual at `binding_arm/CameraTriggerGameObject.hpp:43`. Hook this and skip when `sim().isSimulating()`, or revert via state snapshot. Also, `m_exitStatic` and `m_smoothVelocity` are persistent; check whether ColorAction/EnterEffect-style state persists.
+- `CAState.hpp` -- color-action saved state struct, all `m_fromColor/m_toColor/m_uniqueID` fields. Used by `EffectManagerState`. **[INTEREST-LOW]** part of state-snapshot ecosystem; if sim uses CheckpointObject save/load via `EffectManagerState`, this is one of the stored value-types.
+- `CCAlertCircle.hpp` -- circular alert visual node, skip (cosmetic).
+- `CCAnimatedSprite.hpp` -- general animated sprite. Methods like `runAnimation`, `tweenToAnimation`, `stopTween`, `cleanupSprite`. Mostly cosmetic. Low interest.
+- `CCAnimateFrameCache.hpp` -- frame cache, skip.
+- `CCBlockLayer.hpp` -- editor UI block layer, skip.
+- `CCCircleAlert.hpp` -- alert visual, skip.
+- `CCCircleWave.hpp` -- circle-wave visual node, used as ring/shockwave effect with `setPosition`, `removeMeAndCleanup`, `draw`, `updateTweenAction`, `m_target`, `m_radius`. **[INTEREST-LOW]** if a player-death triggers a circle-wave during sim, suppress. But this is a CCNode visual, no obvious sim-state side effect. Skip unless sim spawns these.
+- `CCCircleWaveDelegate.hpp` -- delegate, skip.
+- `CCContentLayer.hpp` -- generic content layer for scroll views, skip.
+- `CCCountdown.hpp` -- countdown UI, skip.
+- `CCCounterLabel.hpp` -- counter label UI, skip.
+- `CCExtenderNode.hpp` -- node helper, skip.
+- `CCIndexPath.hpp` -- index path utility, skip.
+- `CCLightFlash.hpp` -- visual flash effect node with `playEffect(...)` (huge param list including position/color/intensity/strip params), `cleanupFlash`, `fadeAndRemove`. Used after triggers/death. **[INTEREST-LOW]** purely visual; if sim triggers should suppress, hook `playEffect` and early-return when simulating. `binding_arm/CCLightFlash.hpp:78`.
+- `CCLightStrip.hpp` -- visual light strip child of LightFlash, skip.
+- `CCMenuItemSpriteExtra.hpp` -- menu item sprite, skip.
+- `CCMenuItemToggler.hpp` -- toggle menu item, skip.
+- `CCMoveCNode.hpp` -- internal move-action holder used by `DynamicMoveCalculation`. Holds doubles, `GroupCommandObject2*`, vector of `GroupCommandObject2*`. **[INTEREST-LOW]** internal move-trigger calculation node; relevant if sim must mirror in-flight Move triggers. `binding_arm/CCMoveCNode.hpp:73-76`.
+- `CCNodeContainer.hpp` -- generic CCNode container with virtual `visit()`, skip.
+- `CCPartAnimSprite.hpp` -- part-animation sprite, skip (cosmetic).
+- `CCScrollLayerExt.hpp` -- scroll UI extension, skip.
+- `CCScrollLayerExtDelegate.hpp` -- delegate, skip.
+- `CCSpriteCOpacity.hpp` -- color/opacity sprite, skip.
+- `CCSpriteGrayscale.hpp` -- grayscale sprite, skip.
+- `CCSpritePart.hpp` -- spritePart helper, skip.
+- `CCSpritePlus.hpp` -- "follower" sprite that propagates scale/rotation/flip to attached sprites. Methods `addFollower`, `followSprite`, `setScale`. Pure visual, skip (cosmetic).
+- `CCSpriteWithHue.hpp` -- HSV sprite, skip.
+- `CCTextInputNode.hpp` -- text input UI, skip.
+- `CCURLObject.hpp` -- URL helper, skip.
+- `ChallengeNode.hpp` -- challenge UI, skip.
+- `ChallengesPage.hpp` -- challenge UI, skip.
+- `ChanceObject.hpp` -- small data record `(m_groupID, m_oldGroupID, m_chance, m_unk00c)`. Used by ChanceTrigger to remap group IDs randomly. **[INTEREST]** if sim runs through chance triggers, the random outcome must match reality -- need to seed/snapshot RNG. `binding_arm/ChanceObject.hpp:33-37`.
+- `ChanceTriggerGameObject.hpp` -- holds `gd::vector<ChanceObject> m_chanceObjects`. Methods `containsTargetID(int)`, `editChanceObject(int,int)`, `getTargetIDs(...)`, `remapChanceObjects(unordered_map*)`, `revertChanceRemap()`. **[INTEREST]** chance triggers fire random group remaps -- if sim and reality use different RNG state at the moment they fire, predictions diverge (D - trajectory divergence). Look at `remapChanceObjects` at `binding_arm/ChanceTriggerGameObject.hpp:71` and `revertChanceRemap` at line 80 -- maybe call revert as a sim-cleanup? `m_chanceObjects` at line 81.
+- `CharacterColorDelegate.hpp` -- delegate, skip (UI).
+- `CharacterColorPage.hpp` -- color UI, skip.
+- `CheckpointGameObject.hpp` -- in-level checkpoint object derives `EffectGameObject`. Fields `m_checkpointActivated`, `m_respawnID`. Virtuals `triggerObject`, `triggerActivated`, `restoreObject`, `resetObject`, `updateSyncedAnimation`. Methods `resetCheckpoint()` at `binding_arm/CheckpointGameObject.hpp:124`. **[INTEREST]** trigger-side player-checkpoint creation; if sim simulates past a CheckpointGameObject it could cause real game to think player checkpointed. Already hookable surface. Hook `triggerObject` to no-op when simulating.
+- `CheckpointObject.hpp` -- the BIG state-snapshot object (the one CheckpointObject system itself, not the in-level marker). Holds `GJGameState`, `GJShaderState`, `FMODAudioState`, `EffectManagerState`, `m_player1Checkpoint`, `m_player2Checkpoint`, `m_vectorSavedObjectStateRef`, `m_vectorActiveSaveObjectState`, `m_vectorSpecialSaveObjectState`, `m_gradientTriggerObjectArray`, `m_sequenceTriggerStateUnorderedMap`, `m_commandIndex`. **[VERY HIGH INTEREST: C, D, all-state-related]** -- this is exactly the snapshot vehicle used by GD's checkpoint system. Sim should likely use a CheckpointObject (or its mechanism) at sim-start and restore at sim-end to stop bleed-through (camera, particles, color actions, etc.). Methods `getObject()`, `setObject(GameObject*)`. Fields at `binding_arm/CheckpointObject.hpp:78-99`.
+- `CollisionBlockPopup.hpp` -- editor popup, skip.
+- `CollisionTriggerAction.hpp` -- pending collision-trigger record: `m_blockAID`, `m_blockBID`, `m_targetGroupID`, `m_triggerOnExit`, `m_activateGroup`, `m_triggerUniqueID`, `m_controlID`, `m_remapKeys`. **[INTEREST]** part of `EffectManagerState`; if sim modifies collision-block state (player passes through trigger area), and you don't snapshot this vector, real game can mis-trigger blocks. `binding_arm/CollisionTriggerAction.hpp:14-23`.
+- `ColorAction.hpp` -- runtime color-channel tween action with `step(float dt)` (line 141), `loadFromState(CAState&)` line 96, `saveToState(CAState&)` line 114, `setupFromMap`/`setupFromString`, `m_fromColor/m_toColor/m_duration/m_currentOpacity/m_uniqueID/m_controlID`. **[INTEREST]** color tweens are step()'d each frame; if sim ticks them they will drift the real game's colors unless restored. Use save/load to snapshot before sim and restore after -- mirrors what CheckpointObject's effectManagerState does. Solves a sub-symptom of C (general trigger-state leak).
+- `ColorAction2.hpp` -- simpler value-type version (no CCObject base) with same fields/methods. Same notes.
+- `ColorActionSprite.hpp` -- sprite tied to color channel, skip (cosmetic).
+- `ColorChannelSprite.hpp` -- color channel UI sprite, skip.
+- `ColorSelectDelegate.hpp` -- color UI delegate, skip.
+- `ColorSelectLiveOverlay.hpp` -- editor overlay, skip.
+- `ColorSelectPopup.hpp` -- editor popup, skip.
+- `ColorSetupDelegate.hpp` -- editor delegate, skip.
+- `CommentCell.hpp` -- comment UI, skip.
+- `CommentUploadDelegate.hpp` -- comment UI delegate, skip.
+- `CommunityCreditNode.hpp` -- credits UI, skip.
+- `CommunityCreditsPage.hpp` -- credits UI, skip.
+- `ConfigureHSVWidget.hpp` -- editor widget, skip.
+- `ConfigureValuePopup.hpp` -- editor popup, skip.
+- `ConfigureValuePopupDelegate.hpp` -- editor delegate, skip.
+- `CountTriggerAction.hpp` -- pending pickup-count-trigger record: `m_previousCount`, `m_targetCount`, `m_targetGroupID`, `m_activateGroup`, `m_triggerUniqueID`, `m_controlID`, `m_itemID`, `m_multiActivate`, `m_remapKeys`. **[INTEREST]** part of `EffectManagerState` ledger; if sim picks up coins/items, you must capture and restore. `binding_arm/CountTriggerAction.hpp:33-42`.
+- `CountTriggerGameObject.hpp` -- the trigger object itself (level-side); fields `m_pickupCount`, `m_pickupTriggerMode`, `m_multiActivate`, `m_isOverride`, `m_pickupTriggerMultiplier`. Inherits `EffectGameObject` and overrides `triggerObject`. **[INTEREST]** if sim should not affect pickup-counters, suppress this trigger. Hook `triggerObject(GJBaseGameLayer*, int, gd::vector<int> const*)` at `binding_arm/CountTriggerGameObject.hpp:43` and skip when simulating.
+- `CreateGuidelinesLayer.hpp` -- editor UI, skip.
+- `CreateMenuItem.hpp` -- editor button, skip.
+- `CreateParticlePopup.hpp` -- editor popup, skip.
+- `CreatorLayer.hpp` -- main menu, skip.
+- `CurrencyRewardDelegate.hpp` -- reward UI, skip.
+- `CurrencyRewardLayer.hpp` -- reward UI, skip.
+- `CurrencySprite.hpp` -- currency UI, skip.
+- `CustomizeObjectLayer.hpp` -- editor UI, skip.
+- `CustomizeObjectSettingsPopup.hpp` -- editor popup, skip.
+- `CustomListView.hpp` -- list UI, skip.
+- `CustomMusicCell.hpp` -- music UI, skip.
+- `CustomSFXCell.hpp` -- SFX UI, skip.
+- `CustomSFXDelegate.hpp` -- SFX delegate, skip.
+- `CustomSFXWidget.hpp` -- SFX UI, skip.
+- `CustomSongCell.hpp` -- song UI, skip.
+- `CustomSongDelegate.hpp` -- song delegate, skip.
+- `CustomSongLayer.hpp` -- song UI, skip.
+- `CustomSongLayerDelegate.hpp` -- song delegate, skip.
+- `CustomSongWidget.hpp` -- song UI, skip.
+- `DailyLevelNode.hpp` -- daily browser UI, skip.
+- `DailyLevelPage.hpp` -- daily browser UI, skip.
+- `DashRingObject.hpp` -- derives `RingObject` (i.e. orb-/ring-family). Fields `m_dashSpeed`, `m_endBoost`, `m_maxDuration`, `m_allowCollide`, `m_stopSlide`. **[INTEREST]** dash ring is one of the orb-family activatable objects; sim's orb false-hit (problem 4) likely involves these. Note actual activation is in `EnhancedGameObject::activatedByPlayer` / `hasBeenActivatedByPlayer` (parent chain); this header just holds dash-physics constants. Reference for hitbox/radius questions when verifying false-hits.
+- `DelayedSpawnNode.hpp` -- record `(EffectGameObject* m_gameObject, float m_spawnDelay)`. **[INTEREST]** part of effect-spawn pipeline; if sim ticks past a Spawn trigger with delay, the queued spawn could fire in reality. Snapshot needed. `binding_arm/DelayedSpawnNode.hpp:14`.
+- `DemonFilterDelegate.hpp` -- filter UI, skip.
+- `DemonFilterSelectLayer.hpp` -- filter UI, skip.
+- `DemonInfoPopup.hpp` -- info popup, skip.
+- `DialogDelegate.hpp` -- dialog UI delegate, skip.
+- `DialogLayer.hpp` -- dialog UI, skip.
+- `DialogObject.hpp` -- a dialog-text record (`m_text`, `m_character`, `m_color`, `m_skippable`). UI/skip.
+- `DownloadMessageDelegate.hpp` -- network/UI delegate, skip.
+- `DrawGridLayer.hpp` -- editor grid UI, skip.
+- `DungeonBarsSprite.hpp` -- death-cinematic visual node `animateOutBars()`. Cosmetic; skip unless sim could trigger death animation. Has `visit()` virtual.
+- `DynamicBitset.hpp` -- container utility (`gd::vector<unsigned int> m_bits`, `resize`). Used by spatial / per-frame data structures elsewhere. **[INTEREST-LOW]** if you discover this is what tracks per-section flags it could matter for E (spatial cull). Worth searching for usage in GJBaseGameLayer.
+- `DynamicMoveCalculation.hpp` -- record `(CCMoveCNode* m_moveNode, cocos2d::CCPoint m_offset, GameObject* m_gameObject)`. **[INTEREST]** dynamic move-trigger calculation per frame; sim must include or suppress. `binding_arm/DynamicMoveCalculation.hpp:14-17`.
+- `DynamicObjectAction.hpp` -- record holding multiple GameObject* + floats + bools. Used by dynamic group-action triggers. **[INTEREST]** part of in-flight effect-manager state. `binding_arm/DynamicObjectAction.hpp:33-50`.
+- `DynamicScrollDelegate.hpp` -- scroll UI delegate, skip.
+- `EditButtonBar.hpp` -- editor UI, skip.
+- `EditGameObjectPopup.hpp` -- editor popup, skip.
+- `EditLevelLayer.hpp` -- editor UI, skip.
+- `EditorOptionsLayer.hpp` -- editor UI, skip.
+- `EditorPauseLayer.hpp` -- editor pause UI, skip.
+- `EditorUI.hpp` -- editor UI top-level, skip.
+- `EditTriggersPopup.hpp` -- editor popup, skip.
+- `EffectGameObject.hpp` -- base class for triggers (color/spawn/move/pulse/touch/spawn-delay/etc.), inherits `EnhancedGameObject`. Massive field list. Virtuals: `triggerObject(GJBaseGameLayer*, int, gd::vector<int> const*)` at `binding_arm/EffectGameObject.hpp:70`, `triggerActivated(float)` line 115, `restoreObject()` line 124, `stateSensitiveOff(GJBaseGameLayer*)` line 187, `firstSetup`, `customSetup`. Methods: `playTriggerEffect()` line 230, `triggerEffectFinished()` line 266, `updateSpeedModType()` line 293. Fields include: `m_speedModType` (line 400), `m_speedStart` (line 401), `m_isReverse` (line 399), `m_endReversed` (line 394), `m_zoomValue` (line 388), `m_cameraIsFreeMode` (line 389), `m_cameraEditCameraSettings` (line 390), `m_cameraEasingValue` (line 391), `m_cameraPaddingValue` (line 392), `m_cameraDisableGridSnap` (line 393), `m_gravityValue` (line 386), `m_gravityMod` (line 407), `m_timeWarpTimeMod` (line 395), `m_targetGroupID/m_centerGroupID/m_itemID`, `m_easingType/m_easingRate`, `m_lockToCameraX/Y` (line 315-316), `m_lockToPlayerX/Y` (line 313-314). **[VERY HIGH INTEREST: C, D]** If you hook this single virtual `triggerObject` and gate by `sim().isSimulating()`, you can early-return for triggers that affect the world but you still want to predict (camera, gravity, speed-mod, etc.) -- BUT sim *needs* to apply them locally to predict. Better: apply a sim-only mirror, then on sim-end restore via CheckpointObject snapshot/restore. The camera-related fields above are why CameraTrigger leaks (C). Speed-mod fields are critical for trajectory math (D).
+- `EffectManagerState.hpp` -- big snapshot struct holding vectors/maps for ALL trigger actions: `m_unkVecCAState`, `m_unkVecPulseEffectAction`, `m_vectorTouchToggleAction`, `m_vectorCollisionTriggerAction`, `m_vectorToggleTriggerAction`, `m_vectorSpawnTriggerAction`, `m_itemCountMap`, `m_vectorGroupCommandObject2`, `m_unorderedMapInt_pair_double_double`, `m_timerItemMap`, `m_unorderedMapInt_vectorTimerTriggerAction`. **[VERY HIGH INTEREST: C]** This is exactly the value-type a CheckpointObject stores to roll back trigger state. Sim should capture this before tick-loop and restore after. Will solve most "X trigger leaked from sim" bugs (color, particle-via-spawn, opacity, touch toggles, pulse). `binding_arm/EffectManagerState.hpp:23-43`.
+- `EndLevelLayer.hpp` -- end-level UI, skip.
+- `EndPortalObject.hpp` -- end-of-level portal `GameObject`. Fields `m_gradientBar`, `m_flippedX`, `m_startPosHeightRelated`. Methods `triggerObject(GJBaseGameLayer*)` at `binding_arm/EndPortalObject.hpp:79`, `getSpawnPos()` line 70, `updateEndPos(bool updateParticle)` line 97. **[INTEREST]** the `updateEndPos(bool updateParticle)` parameter implies particle creation tied to the end-portal. If sim never reaches end portal this is moot; but worth knowing it has a "particle" toggle. Skip unless trajectory ends near end-portal.
+- `EndTriggerGameObject.hpp` -- "end of level" trigger derives EffectGameObject. Fields `m_noEffects`, `m_noSFX`, `m_instant`. Hookable `triggerObject` at `binding_arm/EndTriggerGameObject.hpp:52`. **[INTEREST]** if sim hits end-trigger it must NOT actually end the real level; gate with `sim().isSimulating()`. Same family as `EndPortalObject` but for trigger-driven endings.
+- `EnhancedGameObject.hpp` -- base for activatable objects (orbs, pads, portals, etc.). **[VERY HIGH INTEREST: 4 (orb false-hit), 1 (portal particles), D]** Virtuals: `customSetup()` at `binding_arm/EnhancedGameObject.hpp:43`, `resetObject()` line 52, `deactivateObject(bool)` line 61, `triggerActivated(float)` line 88, `restoreObject()` line 97, `animationTriggered()` line 106, `activatedByPlayer(PlayerObject*)` at line 115, `hasBeenActivatedByPlayer(PlayerObject*)` at line 124, `hasBeenActivated()` line 133, `saveActiveColors()` line 142, `canAllowMultiActivate()` line 151, `getHasSyncedAnimation()` line 160, `getHasRotateAction()` line 169, `canMultiActivate(bool)` line 178, `powerOnObject(int)` line 187, `powerOffObject()` line 196, `stateSensitiveOff(GJBaseGameLayer*)` line 205, `updateSyncedAnimation(float, int)` line 214. Fields: `m_isMultiActivate` line 357, `m_activated` line 358, `m_activatedByPlayer1/2` lines 359-360. The activation-record fields are the source of "orb false-hit" if your sim's `m_activatedByPlayer*` flags don't match reality (4). The `activatedByPlayer` virtual is the single best hook to detect real-vs-predicted divergence.
+- `EnhancedTriggerObject.hpp` -- trigger that uses min/max group IDs (`m_minXID`, `m_minYID`, `m_maxXID`, `m_maxYID`). Inherits EffectGameObject. **[INTEREST]** triggers that pick a "random ID in range" -- like ChanceTrigger, depend on RNG; sim must track. `binding_arm/EnhancedTriggerObject.hpp:62-65`.
+- `EnterEffectAnimValue.hpp` -- per-key tween value record (`m_key`, `m_value`, `m_distance`, `m_duration`, `m_elapsed`, `m_easingType`, `m_easingRate`, `m_easingBuffer`). **[INTEREST]** part of EnterEffect tween system; tweens are time-based and persist; worth snapshotting if sim ticks them.
+- `EnterEffectInstance.hpp` -- runtime tween instance for "enter effect" with map of `EnterEffectAnimValue`, `m_targetID`, `m_centerID`, `m_paused`, etc. Methods `animateValue(...)`, `loadTransitions`, `loadValuesFromObject`, `setValue`, `updateTransitions(float dt, GJBaseGameLayer*)` at `binding_arm/EnterEffectInstance.hpp:86`. **[INTEREST]** these instances live in EffectManager and tick each frame; if sim drives them they will visibly "enter" objects in reality after sim-end. Ensure restore.
+- `EnterEffectObject.hpp` -- the trigger that creates `EnterEffectInstance`s. Inherits EffectGameObject. Lots of length/offset/rotation/move/scale/easing fields. `customSetup()` at `binding_arm/EnterEffectObject.hpp:43`. **[INTEREST]** same sim-suppress story as EffectGameObject.
+- `EventLinkTrigger.hpp` -- triggers based on event IDs (`gd::set<int> m_eventIDs`, `m_resetRemap`). Inherits EffectGameObject. Hookable `triggerObject` at `binding_arm/EventLinkTrigger.hpp:52`.
+- `EventTriggerInstance.hpp` -- runtime event-trigger record `(m_targetID, m_uniqueID, m_controlID, m_inactive, m_remapKeys)`. **[INTEREST]** part of in-flight trigger queue.
+- `ExplodeItemNode.hpp` -- pickup-explode UI overlay, skip.
+- `ExplodeItemSprite.hpp` -- explode visual sprite, skip.
+- `ExtendedLayer.hpp` -- a `CCLayer` with `BoomScrollLayerDelegate*` member. Just `init` and `setPosition`. Skip (UI scaffolding).
+- `FileOperation.hpp` -- 3 static fns `getFilePath`, `readFile`, `saveFile`. Skip (file IO not bot-critical).
+- `FileSaveManager.hpp` -- inherits `GManager`. `getStoreData()`, `loadDataFromFile`. Skip (save I/O).
+- `FindBPMLayer.hpp` -- editor UI, skip.
+- `FindObjectPopup.hpp` -- editor popup, skip.
+- `FLAlertLayer.hpp` -- generic alert UI, skip.
+- `FLAlertLayerProtocol.hpp` -- alert delegate, skip.
+- `FMODAudioEngine.hpp` -- audio engine. **[INTEREST-LOW]** if sim should silence trigger SFX, this is where; hook `playEffect`/`playMusic` and gate by `sim().isSimulating()`. Worth a deeper read in G-L survey if FMODAudioState/etc. surface.
+- `FMODAudioState.hpp` -- audio-engine snapshot used by CheckpointObject. **[INTEREST]** part of state-restore mechanism; if sim plays an SFX, audio-state restore via CheckpointObject path could potentially rewind it (likely doesn't undo emitted sound -- so suppression at emit-time is the better fix).
+- `FMODLevelVisualizer.hpp` -- visualizer node, skip (cosmetic).
+- `FMODMusic.hpp` -- music wrapper, skip (audio).
+- `FMODQueuedEffect.hpp` -- queued sfx record, skip (audio queue).
+- `FMODQueuedMusic.hpp` -- queued music record, skip (audio queue).
+- `FMODSound.hpp` -- sound wrapper, skip (audio).
+- `FMODSoundState.hpp` -- per-sound state for snapshot, skip.
+- `FMODSoundTween.hpp` -- sound tween record, skip.
+- `FollowRewardPage.hpp` -- reward page UI, skip.
+- `FontObject.hpp` -- font BMFont config helper. Skip.
+- `ForceBlockGameObject.hpp` -- physics-force block trigger derives `EffectGameObject`. Fields `m_force`, `m_minForce`, `m_maxForce`, `m_relativeForce`, `m_forceRange`, `m_forceID`. Method `calculateForceToTarget(GameObject*)` at `binding_arm/ForceBlockGameObject.hpp:61`. **[INTEREST: D]** force triggers apply forces to player physics; if sim doesn't replicate force or replicates it differently -> trajectory divergence. Crucial that sim tick this with `calculateForceToTarget` mirroring real semantics.
+- `FRequestProfilePage.hpp` -- friend request UI, skip.
+- `FriendRequestDelegate.hpp` -- friend UI delegate, skip.
+- `FriendRequestPopup.hpp` -- friend UI popup, skip.
+- `FriendsProfilePage.hpp` -- friend profile UI, skip.
+
+## Summary of findings in this range
+
+- **CheckpointObject + EffectManagerState are the silver bullet for problem C (camera/trigger leak).** GD already provides a "save full game state, restore later" mechanism used by checkpoints. If `sim().beginSim()` snapshots a CheckpointObject and `endSim()` restores it, you stop bleed-through of color tweens, opacity actions, touch toggles, pulse effects, item counts, group commands, timers, *and the camera-related fields on EffectGameObject*. See `binding_arm/CheckpointObject.hpp:78-99` (state members) and `binding_arm/EffectManagerState.hpp:23-43`. Review G-L for `GJBaseGameLayer::createCheckpoint` / `loadCheckpoint` / `loadFromCheckpoint` -- those are the entry points to confirm.
+- **EffectGameObject::triggerObject is the single highest-value hook** for problems C and D: every trigger -- color, move, gravity, speed-mod, camera (via `CameraTriggerGameObject`), end-trigger, force-block -- routes through this virtual or its overrides. Combined with `EnhancedGameObject::activatedByPlayer` (already hooked), you cover both player-activated objects and area triggers.
+- **Camera leak (problem C) source:** `CameraTriggerGameObject` is just an `EffectGameObject` with extra fields (`m_followObject`, `m_smoothVelocity`, `m_velocityModifier`, `m_exitStatic`, `m_exitInstant`). It triggers via the same `EffectGameObject::triggerObject` path. The actual CCAction-on-camera tween is created somewhere down the chain in GJBaseGameLayer; suspect the persistence is because the camera CCAction is parented on the camera node and `EffectManagerState` does not include it. Consider explicitly stopping all actions on the camera node at sim-end as a backstop.
+- **Orb false-hit (problem 4) source:** `EnhancedGameObject::m_activatedByPlayer1/2` (lines 359-360) and `m_activated` (358), `hasBeenActivated` and `hasBeenActivatedByPlayer` virtuals (lines 124, 133). If your sim PlayerObject differs from real player by even a frame in `playerPos.x`, a near-miss orb may be `activatedByPlayer` in sim but not reality. Solution: snapshot the orb's `m_activated` and `m_activatedByPlayer*` along with the player state, so you don't have to trust collision math for state.
+- **RNG / Chance triggers are a hidden divergence source (problem D):** `ChanceTriggerGameObject::remapChanceObjects` and `EnhancedTriggerObject` random-range-ID -- if your sim and the real game's RNG advance at different rates, they will pick different remap targets. Check whether GJEffectManager (G-L survey) holds the seed or pulls from a global RNG; ensure sim either uses identical seed or uses `revertChanceRemap()` after sim. Also `EnterEffectInstance::updateTransitions(float dt, GJBaseGameLayer*)` ticks per frame -- ensure dt is identical.
+- **Force triggers (problem D, supplementary):** `ForceBlockGameObject::calculateForceToTarget` is a non-virtual game-side method. Sim must replicate its exact math. Likely a candidate for further deep-read once we have the full `EffectGameObject` ancestor chain.
+- **Particles (problem 1):** Nothing in A-F directly governs particle emission lifecycle; the `CCParticleSystemQuad`/`EffectManager` particle pool is in cocos namespace and likely lives under `GJEffectManager` or `EffectManager` (G-L). One mention in this range: `EndPortalObject::updateEndPos(bool updateParticle)` -- a single-bool sim suppression hook. The bigger fish is in G-L.
+- **Performance / spatial cull (problem 5):** Nothing in A-F about `m_sections`/`m_sectionXFactor`/`calcNonEffectObjects`. `DynamicBitset` is a low-level container that *might* be used elsewhere for per-section flag arrays -- worth grepping for usage when surveying G-L. No spatial code surfaced in this range.
+- **Staircase / buffered-jump (problem 6):** Nothing in A-F. `pushButton`/`releaseButton`/`m_holdingButtons` did not appear in any of these files; live in `GJBaseGameLayer` or `PlayerObject` (later survey ranges).
+- **Frame-tick / scheduler (problem 3 sub-cause):** Nothing direct here. `AppDelegate` exposes pause/resume/`trySaveGame` but no fixed-timestep API. Look for `update(float dt)`/`processCommands` in G-L.

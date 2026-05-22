@@ -44,6 +44,12 @@
 			"name": "Account for portals",
 			"description": "Take portals into account for the trajectory simulation"
 		},
+		"triggers": {
+			"type": "bool",
+			"default": true,
+			"name": "Account for triggers",
+			"description": "Take triggers (color/move/toggle/spawn/pulse/etc.) into account for the trajectory simulation. Effect-manager state is snapshotted and restored at sim boundaries so trigger side effects don't leak into the real game."
+		},
 		"bot-enabled": {
 			"type": "bool",
 			"default": false,
