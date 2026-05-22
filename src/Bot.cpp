@@ -281,6 +281,17 @@ void Bot::advanceFrame() {
                     dyVel   = simYVel - p->m_yVelocity;
                     haveYVel = true;
                 }
+                // Sim's gravity-flipped state for the same tick. udMismatch=1
+                // means sim's prediction and real's actual disagree on whether
+                // the player is upside-down at this tick — diagnostic for the
+                // ball-mode snap-to-ceiling class of bug where sim
+                // incorrectly performs a snap real player rejects.
+                int simUD = 0;
+                int udMismatch = 0;
+                if (predIdx < m_best.samplesUpsideDown.size()) {
+                    simUD = m_best.samplesUpsideDown[predIdx] ? 1 : 0;
+                    udMismatch = (simUD != (int)p->m_isUpsideDown) ? 1 : 0;
+                }
 
                 divlogf("tick=%lld idx=%lld pStart=%lld "
                         "pred=(%.3f,%.3f) actual=(%.3f,%.3f) "
@@ -288,7 +299,9 @@ void Bot::advanceFrame() {
                         "yVel=%.4f simYVel=%.4f dYVel=%+.4f%s "
                         "gravity=%.3f speed=%.3f "
                         "gnd=%d/%d/%d/%d btnWant=%d btnHeld=%d "
-                        "jumpBuf=%d gravPortal=%d plan=%s",
+                        "jumpBuf=%d gravPortal=%d "
+                        "ud=%d simUD=%d udMismatch=%d "
+                        "plan=%s",
                         (long long)m_frame, (long long)idx, (long long)m_best.planStart,
                         pred.x, pred.y, actual.x, actual.y,
                         dx, dy, std::sqrt(distSq),
@@ -298,6 +311,7 @@ void Bot::advanceFrame() {
                         (int)p->m_isOnGround3, (int)p->m_isOnGround4,
                         (int)want, (int)held,
                         (int)p->m_jumpBuffered, (int)p->m_touchedGravityPortal,
+                        (int)p->m_isUpsideDown, simUD, udMismatch,
                         planCtx);
 
                 // Rate-limited geode log mirror — keeps live debugging usable
