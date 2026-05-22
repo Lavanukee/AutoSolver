@@ -875,20 +875,23 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
         simA->update(m_frameDt);
         if (simB) simB->update(m_frameDt);
 
-        // Out-of-bounds Y check. The engine kills the real player via a
-        // code path inside GJBaseGameLayer::update (not checkCollisions)
-        // when the player exceeds the playable area — observed on
-        // Bloodbath Ball with cause_obj=null. Sim's checkCollisions-only
-        // death detection misses this. m_groundLayer / m_groundLayer2 are
-        // the visible ground/ceiling bars and their positions delimit the
-        // playable area for the current mode. If sim's player is above
-        // m_groundLayer2 (or below m_groundLayer minus a buffer), mark
-        // sim dead at this tick. The buffer absorbs sub-tick precision —
-        // the engine's actual check probably has its own slack.
+        // OOB-Y: player outside the playable area (above m_groundLayer2
+        // or below m_groundLayer minus a block-sized buffer to absorb
+        // sub-tick precision). Engine kills via cause=null from inside
+        // GJBaseGameLayer::update; sim's checkCollisions-only path
+        // misses it. Confirmed measurable gain on Bloodbath Ball
+        // (death moved from x=746 to x=1126).
+        //
+        // The high-|yVel|-tunneling variant tried earlier was REGRESS-
+        // IVE: |yVel|>11 threshold rejected legitimate plans that real
+        // could execute, dropping the bot from 22.10% back to 20.36%
+        // (death moved earlier and switched from null-cause to a real
+        // Hazard collision). So |yVel|-based heuristics for
+        // anti-cheat don't track the actual engine condition.
         auto checkOOB = [this](PlayerObject* p) -> bool {
             if (!p || !m_pl) return false;
             float const pY = p->getPositionY();
-            float const buffer = 30.f;  // one GD block tall
+            float const buffer = 30.f;
             if (m_pl->m_groundLayer2) {
                 float const ceilingY = m_pl->m_groundLayer2->getPositionY();
                 if (pY > ceilingY + buffer) return true;

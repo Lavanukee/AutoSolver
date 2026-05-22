@@ -107,22 +107,28 @@ void death(PlayerObject* player, GameObject* causeObj, float percent) {
     int const causeType = causeObj ? static_cast<int>(causeObj->m_objectType) : -1;
     bool const isAnticheat = pl && causeObj == pl->m_anticheatSpike;
 
-    // Don't let an anticheat-spike fire (intercepted + cancelled by Eclipse
-    // Menu's anti-anticheat) latch the dedup. Otherwise the REAL death's
-    // destroyPlayer call gets suppressed and we lose the cause-object
-    // identification we need to diagnose. Anticheat fires log unconditionally
-    // (not dedup-counted) but do not consume the latch.
     if (!isAnticheat) {
-        // Dedup: engine fires destroyPlayer every physics tick during the
-        // death animation. Latch on the first NON-anticheat fire after a
-        // reset/start; later fires in the same death are dropped.
         if (g_deathLatched) return;
         g_deathLatched = true;
     }
+
+    // Capture ground-layer Y bounds + player UD state so we can see
+    // whether the engine's null-cause kill is correlated with an
+    // out-of-bounds Y condition. m_groundLayer is the bottom bar,
+    // m_groundLayer2 is the top bar (when present). Their getPositionY
+    // is the world Y of the bar's anchor.
+    float floorY = -999.f;
+    float ceilingY = -999.f;
+    if (pl && pl->m_groundLayer)  floorY   = pl->m_groundLayer->getPositionY();
+    if (pl && pl->m_groundLayer2) ceilingY = pl->m_groundLayer2->getPositionY();
+    int const playerUD = player->m_isUpsideDown ? 1 : 0;
     geode::log::info("[TEL] death who={} percent={:.2f} player_pos=({:.1f},{:.1f}) "
-                     "cause_obj_type={} anticheat={} trig_obj_total={} trig_act_total={}",
+                     "yVel={:.2f} ud={} floorY={:.1f} ceilingY={:.1f} "
+                     "cause_obj_type={} anticheat={} "
+                     "trig_obj_total={} trig_act_total={}",
                      isRealP1 ? "real1" : "real2",
-                     percent, pos.x, pos.y, causeType, isAnticheat ? 1 : 0,
+                     percent, pos.x, pos.y, player->m_yVelocity, playerUD,
+                     floorY, ceilingY, causeType, isAnticheat ? 1 : 0,
                      g_triggerObjTotal, g_triggerActTotal);
 }
 
