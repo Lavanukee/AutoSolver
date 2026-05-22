@@ -875,47 +875,6 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
         simA->update(m_frameDt);
         if (simB) simB->update(m_frameDt);
 
-        // OOB-Y: player outside the playable area (above m_groundLayer2
-        // or below m_groundLayer minus a block-sized buffer to absorb
-        // sub-tick precision). Engine kills via cause=null from inside
-        // GJBaseGameLayer::update; sim's checkCollisions-only path
-        // misses it. Confirmed measurable gain on Bloodbath Ball
-        // (death moved from x=746 to x=1126).
-        //
-        // The high-|yVel|-tunneling variant tried earlier was REGRESS-
-        // IVE: |yVel|>11 threshold rejected legitimate plans that real
-        // could execute, dropping the bot from 22.10% back to 20.36%
-        // (death moved earlier and switched from null-cause to a real
-        // Hazard collision). So |yVel|-based heuristics for
-        // anti-cheat don't track the actual engine condition.
-        auto checkOOB = [this](PlayerObject* p) -> bool {
-            if (!p || !m_pl) return false;
-            float const pY = p->getPositionY();
-            float const buffer = 30.f;
-            if (m_pl->m_groundLayer2) {
-                float const ceilingY = m_pl->m_groundLayer2->getPositionY();
-                if (pY > ceilingY + buffer) return true;
-            }
-            if (m_pl->m_groundLayer) {
-                float const floorY = m_pl->m_groundLayer->getPositionY();
-                if (pY < floorY - buffer) return true;
-            }
-            return false;
-        };
-        if (checkOOB(simA) || (simB && checkOOB(simB))) {
-            result.died = true;
-            result.positions.push_back(simA->getPosition());
-            result.yVels.push_back(simA->m_yVelocity);
-            result.upsideDown.push_back(simA->m_isUpsideDown ? 1 : 0);
-            if (simB) {
-                result.positions2.push_back(simB->getPosition());
-                result.yVels2.push_back(simB->m_yVelocity);
-                result.upsideDown2.push_back(simB->m_isUpsideDown ? 1 : 0);
-            }
-            ++result.framesSurvived;
-            break;
-        }
-
         result.positions.push_back(simA->getPosition());
         result.yVels.push_back(simA->m_yVelocity);
         result.upsideDown.push_back(simA->m_isUpsideDown ? 1 : 0);

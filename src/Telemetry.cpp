@@ -1,5 +1,7 @@
 #include "Telemetry.hpp"
 #include "Trajectory.hpp"
+#include "Triggers.hpp"
+#include "Portals.hpp"
 
 using namespace geode::prelude;
 
@@ -147,6 +149,91 @@ namespace {
 // 60Hz, plenty for reconstructing the gameplay trajectory.
 constexpr int kRealPosStride = 6;
 int g_realPosStride = 0;
+}
+
+namespace {
+// Cadence for triggerScan. Per-visual-frame is overkill; once every
+// ~60 visual frames (~1 second) gives a moving picture without log spam.
+constexpr int kTriggerScanStride = 60;
+int g_triggerScanStride = 0;
+// Window around the player to consider "nearby." 800 units ahead is the
+// rough horizon the bot's sim looks at (~half the 360-tick plan horizon).
+// 100 behind catches triggers the player just passed.
+constexpr float kTriggerScanAhead  = 800.f;
+constexpr float kTriggerScanBehind = 100.f;
+// Cap how many triggers we log per scan so an extremely dense section
+// doesn't drown the log; 30 covers a typical busy area.
+constexpr int kTriggerScanLimit = 30;
+}
+
+void triggerScan(PlayLayer* pl) {
+    if (!pl || !pl->m_player1) return;
+    if (++g_triggerScanStride < kTriggerScanStride) return;
+    g_triggerScanStride = 0;
+    float const px = pl->m_player1->getPositionX();
+    float const minX = px - kTriggerScanBehind;
+    float const maxX = px + kTriggerScanAhead;
+    auto* objs = pl->m_objects;
+    if (!objs) return;
+    int logged = 0;
+    int total = 0;
+    int activated = 0;
+    int unactivated = 0;
+    // Also scan hazards + animated hazards. Many null-cause deaths could
+    // come from hazards the sim's collision filter has correctly retained
+    // but that real player hits at a position sim's check misses. Also
+    // scan portals (especially TeleportPortal) since they can launch the
+    // player into otherwise-OOB regions and the bot's plan may not honor
+    // the limits.
+    auto isInteresting = [](GameObject* obj) -> bool {
+        using GO = GameObjectType;
+        auto t = obj->m_objectType;
+        return traj::isTrigger(t)
+            || t == GO::Hazard || t == GO::AnimatedHazard
+            || t == GO::TeleportPortal
+            || traj::isPortal(t);  // includes mode/gravity portals
+    };
+    auto kindName = [](GameObjectType t) -> char const* {
+        using GO = GameObjectType;
+        switch (t) {
+            case GO::Hazard: return "hazard";
+            case GO::AnimatedHazard: return "anim_hazard";
+            case GO::TeleportPortal: return "teleport_portal";
+            default:
+                if (traj::isTrigger(t)) return "trigger";
+                if (traj::isPortal(t)) return "portal";
+                return "other";
+        }
+    };
+    float const py = pl->m_player1->getPositionY();
+    for (int i = 0; i < static_cast<int>(objs->count())
+                    && logged < kTriggerScanLimit; ++i) {
+        auto* obj = static_cast<GameObject*>(objs->objectAtIndex(i));
+        if (!obj || !isInteresting(obj)) continue;
+        float const ox = obj->getPositionX();
+        if (ox < minX || ox > maxX) continue;
+        ++total;
+        auto* effect = static_cast<EffectGameObject*>(obj);
+        bool const wasAct1 = effect && effect->m_activatedByPlayer1;
+        bool const wasAct2 = effect && effect->m_activatedByPlayer2;
+        bool const wasActAny = effect && effect->m_activated;
+        if (wasActAny) ++activated; else ++unactivated;
+        auto pos = obj->getPosition();
+        geode::log::info("[TEL] trigger_scan kind={} type={} pos=({:.1f},{:.1f}) "
+                         "act={} act1={} act2={} "
+                         "player=({:.1f},{:.1f}) dx={:+.1f} dy={:+.1f}",
+                         kindName(obj->m_objectType),
+                         static_cast<int>(obj->m_objectType),
+                         pos.x, pos.y,
+                         wasActAny ? 1 : 0, wasAct1 ? 1 : 0, wasAct2 ? 1 : 0,
+                         px, py, ox - px, pos.y - py);
+        ++logged;
+    }
+    if (total > 0) {
+        geode::log::info("[TEL] trigger_scan_summary nearby_triggers={} "
+                         "activated={} unactivated={} logged={} player_x={:.1f}",
+                         total, activated, unactivated, logged, px);
+    }
 }
 
 void realPos(PlayerObject* player, float percent) {

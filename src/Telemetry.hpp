@@ -30,6 +30,19 @@ void botSearch(int64_t frame, int candidateCount, int bestSurvived,
 // real player went, when, on each attempt.
 void realPos(PlayerObject* player, float percent);
 
+// Per-frame trigger scan around the real player. Iterates the level's
+// active objects, filters to triggers (classified by Triggers.hpp), and
+// logs the ones near the player with their type + position + active state.
+// Two purposes:
+//   1) Identify position-fire triggers the engine activates from real
+//      player's x scan but sim's collision-based activation misses —
+//      candidates for sim-side null-cause-death root causes.
+//   2) Build the data foundation for proper trigger simulation: knowing
+//      which triggers are near the sim's predicted path lets us scan
+//      and fire them in sim too.
+// Rate-limited internally (every ~60 visual frames).
+void triggerScan(PlayLayer* pl);
+
 // Trigger fires — wired in TrajEffectHook in Hooks.cpp. `who` is a short tag
 // identifying which player fired the trigger ("sim1"/"sim2"/"real1"/"real2").
 void triggerObject(int objectType, char const* who, float playerX, float triggerX);

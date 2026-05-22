@@ -1,5 +1,6 @@
 #include "Bot.hpp"
 #include "BotViz.hpp"
+#include "Telemetry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -240,6 +241,9 @@ bool Bot::stepVisualFrameAndShouldSearch() {
 // the D1/D2/D3 audit list). Log player physics fields alongside so the source
 // is identifiable from the trace.
 void Bot::advanceFrame() {
+    // Per-frame trigger scan around the real player. Stride-limited inside.
+    tel::triggerScan(m_pl);
+
     // UD-transition log: fire ONCE whenever real player's m_isUpsideDown
     // flips, with sim's predicted UD at the same tick for direct
     // comparison. The position-drift-gated divergence log misses this
