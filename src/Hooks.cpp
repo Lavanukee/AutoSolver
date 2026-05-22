@@ -79,10 +79,6 @@ class $modify(TrajPlayLayerHook, PlayLayer) {
     void destroyPlayer(PlayerObject* player, GameObject* gameObject) {
         if (isShadow_()) { PlayLayer::destroyPlayer(player, gameObject); return; }
         if (gameObject != m_anticheatSpike && sim().markSimDeadIfSimPlayer(player)) return;
-        // Telemetry: log real-player death with cause object type + percent.
-        // Sim deaths are handled via markSimDeadIfSimPlayer above and are not
-        // reported (would drown the log — bot dies thousands of times per
-        // visual frame across candidates).
         tel::death(player, gameObject, getCurrentPercent());
         PlayLayer::destroyPlayer(player, gameObject);
     }

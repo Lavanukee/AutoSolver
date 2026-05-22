@@ -202,6 +202,26 @@ bool Bot::shouldDiscardP2Flip(cocos2d::CCPoint actualPos) const {
 
 void Bot::commitBest(BestPath&& nb) {
     m_best = std::move(nb);
+    // Diagnostic telemetry: log what sim predicts for the plan we just
+    // committed. When real later dies, we can compare real_death's
+    // position/percent to this plan's predicted endpoint:
+    //   - real dies SHORT of plan_end → sim missed a death real saw
+    //     (collision detection gap, hitbox mismatch, snap-difference)
+    //   - real dies AT plan_end (died=1) → sim correctly predicted the
+    //     death; bot has no better path (algorithm limitation)
+    auto const endP = m_best.samples.empty()
+        ? cocos2d::CCPoint{0.f, 0.f}
+        : m_best.samples.back();
+    auto const startP = m_best.samples.empty()
+        ? cocos2d::CCPoint{0.f, 0.f}
+        : m_best.samples.front();
+    geode::log::info("[TEL] commit plan_start={} plan_len={} survived={} "
+                     "died={} start_pos=({:.1f},{:.1f}) end_pos=({:.1f},{:.1f})",
+                     m_best.planStart,
+                     m_best.plan.size(),
+                     m_best.lastSurvivingFrame - m_best.planStart,
+                     m_best.died ? 1 : 0,
+                     startP.x, startP.y, endP.x, endP.y);
 }
 
 bool Bot::stepVisualFrameAndShouldSearch() {

@@ -102,28 +102,23 @@ void death(PlayerObject* player, GameObject* causeObj, float percent) {
     }
     auto pos = player->getPosition();
 
-    // Filter spurious early destroyPlayer fires. The engine calls
-    // destroyPlayer once during level setup (state cleanup, before any
-    // gameplay), with the player at spawn position. Earlier this poisoned
-    // the dedup latch: the spurious call latched at (~1.0, 105.0,
-    // percent 0.00), then the REAL death that ended the attempt was
-    // suppressed. Filter by "has the player meaningfully moved": spawn x
-    // is ~0-1, so anything under x<5 is almost certainly spawn-state. A
-    // real death anywhere past the very first tick has x > 5 already (one
-    // tick of cube-speed-1 travel is ~1.3 units; by the time a player can
-    // hit any object, they've moved further than that). False negatives
-    // only happen if a level genuinely kills the player within the first
-    // 5 units, which is rare even on the hardest levels.
     if (pos.x < 5.f) return;
-
-    // Dedup: engine fires destroyPlayer every physics tick during the death
-    // animation. Latch on the first fire after a reset/start; later fires
-    // in the same death are dropped. The latch clears on level reset/start.
-    if (g_deathLatched) return;
-    g_deathLatched = true;
 
     int const causeType = causeObj ? static_cast<int>(causeObj->m_objectType) : -1;
     bool const isAnticheat = pl && causeObj == pl->m_anticheatSpike;
+
+    // Don't let an anticheat-spike fire (intercepted + cancelled by Eclipse
+    // Menu's anti-anticheat) latch the dedup. Otherwise the REAL death's
+    // destroyPlayer call gets suppressed and we lose the cause-object
+    // identification we need to diagnose. Anticheat fires log unconditionally
+    // (not dedup-counted) but do not consume the latch.
+    if (!isAnticheat) {
+        // Dedup: engine fires destroyPlayer every physics tick during the
+        // death animation. Latch on the first NON-anticheat fire after a
+        // reset/start; later fires in the same death are dropped.
+        if (g_deathLatched) return;
+        g_deathLatched = true;
+    }
     geode::log::info("[TEL] death who={} percent={:.2f} player_pos=({:.1f},{:.1f}) "
                      "cause_obj_type={} anticheat={} trig_obj_total={} trig_act_total={}",
                      isRealP1 ? "real1" : "real2",

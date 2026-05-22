@@ -693,19 +693,6 @@ void TrajectorySimulator::runBranch(PlayerObject* sim, PlayerObject* base,
 
     for (int i = 0; i < m_iterations; ++i) {
         cocos2d::CCPoint prev = sim->getPosition();
-        // Advance the effect manager per sim tick. Splitting into four
-        // explicit calls (updateEffects + prepareMoveActions +
-        // processMoveCalculations + postMoveActions) was needed because
-        // updateEffects alone only ticks the high-level color/pulse/etc.
-        // state — it does NOT apply queued move commands to GameObject
-        // positions. The divergence-log analysis on Platinum Adventure
-        // (tick=3403..3420) showed sim predicting a platform at Y=250
-        // while real player was falling (yVel=-1.87): a move trigger
-        // had displaced the platform in real, but sim was still seeing
-        // the original geometry because the move offsets sat queued and
-        // were never applied to objects. Calling processMoveCalculations
-        // is what actually writes positions; the prepare/post pair
-        // brackets it the same way the engine's per-tick path does.
         if (m_triggers && m_pl->m_effectManager) {
             auto* fx = m_pl->m_effectManager;
             fx->updateEffects(m_frameDt);
@@ -837,16 +824,7 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
             wantB = wantA;
         }
 
-        // Advance the effect manager per sim tick. See the matching block
-        // in runBranch above — updateEffects alone doesn't apply queued
-        // move commands to GameObject positions, so we ALSO call the move
-        // application sequence (prepareMoveActions / processMoveCalculations
-        // / postMoveActions). Without these, move-trigger-displaced
-        // platforms stay in their original position in sim while reality
-        // sees them moved, producing the platform-falls-out divergence
-        // pattern seen on Platinum Adventure (tick=3403..3420: X aligned,
-        // simYVel=+5 while real yVel=-1.87, sim "standing on" a platform
-        // that real had already had moved out from under it).
+        // Per-tick effect-manager update. See matching block in runBranch.
         if (m_triggers && m_pl->m_effectManager) {
             auto* fx = m_pl->m_effectManager;
             fx->updateEffects(m_frameDt);
