@@ -11,7 +11,8 @@ constexpr float LINE_THICK    = 0.6f;
 constexpr float PATH_THICK    = 0.9f;
 constexpr float TRACE_THICK   = 0.55f; // candidate-path traces (drawn under best path)
 constexpr float LINE_HALF_HEIGHT = 600.f; // tall enough to span any reasonable camera Y range
-constexpr cocos2d::ccColor4F COLOR_PATH    = {1.00f, 0.60f, 0.10f, 1.0f}; // orange — followed best path
+constexpr cocos2d::ccColor4F COLOR_PATH    = {1.00f, 0.60f, 0.10f, 1.0f}; // orange — followed best path (normal gravity)
+constexpr cocos2d::ccColor4F COLOR_PATH_UD = {1.00f, 0.40f, 0.85f, 1.0f}; // pink   — followed best path (gravity-flipped)
 constexpr cocos2d::ccColor4F COLOR_HOLD    = {1.00f, 0.60f, 0.10f, 1.0f}; // orange — hold start (matches path)
 constexpr cocos2d::ccColor4F COLOR_RELEASE = {0.20f, 0.55f, 1.00f, 1.0f}; // blue   — release start
 }
@@ -96,18 +97,27 @@ void BotViz::render() {
     auto const& bp = bot.bestPath();
     if (bp.empty() || bp.samples.empty()) return;
 
-    // Continuous orange line traces the bot's currently-followed best path
-    // for each player (P1 always; P2 only if dual-mode samples were captured).
-    // Drawn ALWAYS while the bot is enabled, independent of the dot/line
-    // debug-viz mode.
-    auto drawPath = [&](std::vector<cocos2d::CCPoint> const& s) {
+    // Continuous orange/pink line traces the bot's currently-followed best
+    // path for each player. Orange in normal-gravity ticks, pink when sim
+    // had m_isUpsideDown=true (gravity-flipped — typically ball-mode after
+    // snapping to a ceiling). Lets us SEE where sim believes the player
+    // has gone upside-down, which on Bloodbath Ball is the diagnostic for
+    // the "sim snaps to ceiling that real can't" bug class. Drawn ALWAYS
+    // while the bot is enabled, independent of the dot/line debug-viz.
+    auto drawPath = [&](std::vector<cocos2d::CCPoint> const& s,
+                        std::vector<uint8_t> const& ud) {
         if (s.size() < 2) return;
         for (size_t i = 1; i < s.size(); ++i) {
-            m_node->drawSegment(s[i - 1], s[i], PATH_THICK, COLOR_PATH);
+            // Segment is colored by the gravity state AT ITS END tick
+            // (post-tick state of plan[i-1]). Index i indexes into the
+            // [0..size()-1] samples array — same dimension as upsideDown.
+            bool const flipped = i < ud.size() && ud[i] != 0;
+            auto const& c = flipped ? COLOR_PATH_UD : COLOR_PATH;
+            m_node->drawSegment(s[i - 1], s[i], PATH_THICK, c);
         }
     };
-    drawPath(bp.samples);
-    drawPath(bp.samples2);
+    drawPath(bp.samples,  bp.samplesUpsideDown);
+    drawPath(bp.samples2, bp.samples2UpsideDown);
 
     if (bot.debugViz() == DebugViz::Off) return;
     if (bp.samples.size() < bp.plan.size() + 1) return;

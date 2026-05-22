@@ -168,6 +168,8 @@ void Bot::runSearch() {
             bp.samples2           = std::move(resP2.positions);
             bp.samplesYVel        = std::move(resP1.yVels);
             bp.samples2YVel       = std::move(resP2.yVels);
+            bp.samplesUpsideDown  = std::move(resP1.upsideDown);
+            bp.samples2UpsideDown = std::move(resP2.upsideDown);
             winner = std::move(bp);
             haveWinner = true;
             winnerScore = Score { joint,
@@ -243,6 +245,8 @@ void Bot::runSearch() {
             bp.samples2           = std::move(res.positions2);
             bp.samplesYVel        = std::move(res.yVels);
             bp.samples2YVel       = std::move(res.yVels2);
+            bp.samplesUpsideDown  = std::move(res.upsideDown);
+            bp.samples2UpsideDown = std::move(res.upsideDown2);
             winner = std::move(bp);
         }
     }

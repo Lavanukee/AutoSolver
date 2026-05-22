@@ -798,11 +798,15 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
     result.positions.push_back(simA->getPosition());
     result.yVels.reserve(plan.size() + 1);
     result.yVels.push_back(simA->m_yVelocity);
+    result.upsideDown.reserve(plan.size() + 1);
+    result.upsideDown.push_back(simA->m_isUpsideDown ? 1 : 0);
     if (simB) {
         result.positions2.reserve(plan.size() + 1);
         result.positions2.push_back(simB->getPosition());
         result.yVels2.reserve(plan.size() + 1);
         result.yVels2.push_back(simB->m_yVelocity);
+        result.upsideDown2.reserve(plan.size() + 1);
+        result.upsideDown2.push_back(simB->m_isUpsideDown ? 1 : 0);
     }
 
     // Independent P2 plan only meaningful when simB exists; otherwise P2
@@ -873,9 +877,11 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
 
         result.positions.push_back(simA->getPosition());
         result.yVels.push_back(simA->m_yVelocity);
+        result.upsideDown.push_back(simA->m_isUpsideDown ? 1 : 0);
         if (simB) {
             result.positions2.push_back(simB->getPosition());
             result.yVels2.push_back(simB->m_yVelocity);
+            result.upsideDown2.push_back(simB->m_isUpsideDown ? 1 : 0);
         }
         ++result.framesSurvived;
     }

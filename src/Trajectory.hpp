@@ -23,6 +23,16 @@ struct PlanResult {
     // sim_yVel vs real yVel at the same tick. yVels2 mirrors for P2 in dual.
     std::vector<float>            yVels;
     std::vector<float>            yVels2;
+    // Per-tick gravity-flipped state. Sim's `m_isUpsideDown` flag after
+    // each tick — true means the player is currently in gravity-flipped
+    // mode (rolling on a ceiling in ball mode, or other inverted-gravity
+    // states). Used by BotViz to color the path: regular gravity = orange,
+    // inverted = pink. Visible in screenshots, this lets us SEE where sim
+    // believes the ball has snapped to a ceiling — a frequent class of
+    // "sim says alive, real dies" bug where sim incorrectly succeeds at
+    // a snap real player cannot perform.
+    std::vector<uint8_t>          upsideDown;
+    std::vector<uint8_t>          upsideDown2;
     int  framesSurvived = 0;
     bool died = false;
 };

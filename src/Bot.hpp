@@ -41,6 +41,12 @@ struct BestPath {
     // resolution, jump impulse, etc.). samplesYVel2 mirrors for P2.
     std::vector<float>                samplesYVel;
     std::vector<float>                samples2YVel;
+    // Per-tick gravity-flipped state (sim's m_isUpsideDown). BotViz uses
+    // this to color the path: orange in normal gravity, pink when sim's
+    // player is in gravity-flipped state. Catches a class of "sim says
+    // alive, real dies" bugs where sim incorrectly snaps to a ceiling.
+    std::vector<uint8_t>              samplesUpsideDown;
+    std::vector<uint8_t>              samples2UpsideDown;
 
     bool empty() const { return plan.empty(); }
     bool covers(int64_t absFrame) const {
