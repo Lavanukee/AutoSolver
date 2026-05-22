@@ -875,6 +875,44 @@ PlanResult TrajectorySimulator::runPlan(PlayerObject* base1, PlayerObject* base2
         simA->update(m_frameDt);
         if (simB) simB->update(m_frameDt);
 
+        // Out-of-bounds Y check. The engine kills the real player via a
+        // code path inside GJBaseGameLayer::update (not checkCollisions)
+        // when the player exceeds the playable area — observed on
+        // Bloodbath Ball with cause_obj=null. Sim's checkCollisions-only
+        // death detection misses this. m_groundLayer / m_groundLayer2 are
+        // the visible ground/ceiling bars and their positions delimit the
+        // playable area for the current mode. If sim's player is above
+        // m_groundLayer2 (or below m_groundLayer minus a buffer), mark
+        // sim dead at this tick. The buffer absorbs sub-tick precision —
+        // the engine's actual check probably has its own slack.
+        auto checkOOB = [this](PlayerObject* p) -> bool {
+            if (!p || !m_pl) return false;
+            float const pY = p->getPositionY();
+            float const buffer = 30.f;  // one GD block tall
+            if (m_pl->m_groundLayer2) {
+                float const ceilingY = m_pl->m_groundLayer2->getPositionY();
+                if (pY > ceilingY + buffer) return true;
+            }
+            if (m_pl->m_groundLayer) {
+                float const floorY = m_pl->m_groundLayer->getPositionY();
+                if (pY < floorY - buffer) return true;
+            }
+            return false;
+        };
+        if (checkOOB(simA) || (simB && checkOOB(simB))) {
+            result.died = true;
+            result.positions.push_back(simA->getPosition());
+            result.yVels.push_back(simA->m_yVelocity);
+            result.upsideDown.push_back(simA->m_isUpsideDown ? 1 : 0);
+            if (simB) {
+                result.positions2.push_back(simB->getPosition());
+                result.yVels2.push_back(simB->m_yVelocity);
+                result.upsideDown2.push_back(simB->m_isUpsideDown ? 1 : 0);
+            }
+            ++result.framesSurvived;
+            break;
+        }
+
         result.positions.push_back(simA->getPosition());
         result.yVels.push_back(simA->m_yVelocity);
         result.upsideDown.push_back(simA->m_isUpsideDown ? 1 : 0);
