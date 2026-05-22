@@ -169,6 +169,10 @@ private:
     int64_t    m_frame     = 0;
     bool       m_injecting = false;
     bool       m_lastHeld  = false;
+    // Real player's m_isUpsideDown from the previous advanceFrame call.
+    // Used to detect UD transitions and log them via [TEL] ud_flip for
+    // diagnosing ball-mode gravity-flip sim/real timing asymmetry.
+    bool       m_lastRealUD = false;
 
     float      m_divergenceThreshold = 1.f;
 

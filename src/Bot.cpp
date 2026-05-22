@@ -240,6 +240,35 @@ bool Bot::stepVisualFrameAndShouldSearch() {
 // the D1/D2/D3 audit list). Log player physics fields alongside so the source
 // is identifiable from the trace.
 void Bot::advanceFrame() {
+    // UD-transition log: fire ONCE whenever real player's m_isUpsideDown
+    // flips, with sim's predicted UD at the same tick for direct
+    // comparison. The position-drift-gated divergence log misses this
+    // class (BL Ball positions match bit-exactly) but UD-transition
+    // events are rare enough to log every one. Tells us:
+    //   - when real flips gravity (which tick)
+    //   - what sim predicted UD at that tick (matches or differs?)
+    //   - if sim's prediction tick differs from real's actual flip tick
+    //     by even one tick, that's the smoking-gun timing-skew.
+    if (m_pl && m_pl->m_player1) {
+        bool const realUD = m_pl->m_player1->m_isUpsideDown;
+        if (realUD != m_lastRealUD) {
+            int64_t const idx2 = m_frame - m_best.planStart;
+            size_t const predIdx2 = static_cast<size_t>(idx2 + 1);
+            int simUD = -1;
+            if (idx2 >= 0 && predIdx2 < m_best.samplesUpsideDown.size()) {
+                simUD = m_best.samplesUpsideDown[predIdx2] ? 1 : 0;
+            }
+            auto const pos = m_pl->m_player1->getPosition();
+            geode::log::info("[TEL] ud_flip tick={} idx={} pos=({:.1f},{:.1f}) "
+                             "realUD {}->{} simUD={} match={}",
+                             m_frame, idx2, pos.x, pos.y,
+                             m_lastRealUD ? 1 : 0, realUD ? 1 : 0,
+                             simUD,
+                             (simUD == (realUD ? 1 : 0)) ? 1 : 0);
+            m_lastRealUD = realUD;
+        }
+    }
+
     if (m_pl && m_pl->m_player1 && !m_best.empty()) {
         int64_t const idx = m_frame - m_best.planStart;
         size_t const predIdx = static_cast<size_t>(idx + 1);

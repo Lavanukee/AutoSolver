@@ -1,2 +1,2 @@
-# autosolver divergence log — session Fri May 22 11:18:02 2026
+# autosolver divergence log — session Fri May 22 11:40:41 2026
 # fields: tick=240Hz physics frame; idx=offset into plan; pStart=plan start frame; pred=(x,y) sim post-tick prediction; actual=(x,y) real post-tick position; d=(dx,dy) dist=sqrt; yVel=real player; simYVel=sim's yVel for the same tick; dYVel=simYVel-yVel (positive=sim faster upward); gravity/speed=real player; gnd=g1/g2/g3/g4; btnWant=plan input THIS tick; btnHeld=real button state; plan=binary context, [x] marks THIS tick
